@@ -1,0 +1,6 @@
+ultralytics==8.1.0
+opencv-python==4.9.0.80
+streamlit==1.31.0
+pandas==2.2.0
+moviepy==1.0.3
+plotly==5.18.0
