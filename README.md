@@ -1,4 +1,4 @@
-# Analizador Táctico IA - MVP (Procesamiento Post-Partido)
+# Asistente Táctico IA - MVP (Procesamiento Post-Partido)
 
 Este repositorio contiene el Producto Mínimo Viable (MVP) del sistema de análisis táctico automatizado diseñado para clubes de fútbol regional. Utiliza Inteligencia Artificial y Visión por Computadora para procesar videos en diferido de las cámaras de fondo (Norte y Sur), transformando la perspectiva diagonal en un plano métrico 2D único para calcular la compacidad del bloque y permitir el etiquetado táctico ágil.
 
