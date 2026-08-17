@@ -22,6 +22,18 @@ VIDEOS_DIR  = ROOT / "data" / "videos"
 # Cualquier video con la cámara fija en altura desde un extremo sirve para testear
 
 
+def _add_duration(start: str, duration: str) -> str:
+    """Suma start + duration (ambos HH:MM:SS) y devuelve el tiempo final HH:MM:SS."""
+    def to_seconds(t: str) -> int:
+        h, m, s = (int(x) for x in t.split(":"))
+        return h * 3600 + m * 60 + s
+
+    total = to_seconds(start) + to_seconds(duration)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
 def download(url: str, out_dir: Path, start: str = None, duration: str = None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -39,14 +51,16 @@ def download(url: str, out_dir: Path, start: str = None, duration: str = None) -
     ]
 
     # Recorte opcional: útil para testear solo los primeros 10 minutos
+    # yt-dlp espera el formato "*inicio-fin" (ambos tiempos absolutos, no una duración)
     if start or duration:
-        section = ""
-        if start:
-            section += f"*{start}"
+        real_start = start or "00:00:00"
         if duration:
-            section += f"-{duration}" if not start else f"+{duration}"
+            real_end = _add_duration(real_start, duration)
+            section = f"*{real_start}-{real_end}"
+        else:
+            section = f"*{real_start}-inf"  # sin duration: desde el start hasta el final
         cmd += ["--download-sections", section, "--force-keyframes-at-cuts"]
-        print(f"[INFO] Recortando: desde {start or '0:00'} duración {duration or 'completo'}")
+        print(f"[INFO] Recortando: desde {real_start} hasta {real_end if duration else 'el final'}")
 
     print(f"[INFO] URL: {url}")
     print(f"[INFO] Destino: {out_dir}")
