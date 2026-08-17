@@ -1,0 +1,26 @@
+# ── Datos — NO subir al repo ──────────────────────────────
+data/videos/
+data/outputs/
+data/db/
+
+# ── Pesos del modelo ──────────────────────────────────────
+*.pt
+*.onnx
+*.engine
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ── Sistema ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.env
+*.log
