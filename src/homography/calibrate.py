@@ -49,6 +49,12 @@ REFERENCE_POINTS = {
     "area_chica_inf_izq":   (0.0, FIELD_WIDTH / 2 + 9.16),
     "area_grande_sup_izq":  (0.0, FIELD_WIDTH / 2 - 20.16),
     "area_grande_inf_izq":  (0.0, FIELD_WIDTH / 2 + 20.16),
+    # Lado derecho (arco derecho) — agregado para cámaras que solo ven la mitad de cancha
+    "area_chica_sup_der":   (FIELD_LENGTH, FIELD_WIDTH / 2 - 9.16),
+    "area_chica_inf_der":   (FIELD_LENGTH, FIELD_WIDTH / 2 + 9.16),
+    "area_grande_sup_der":  (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2 - 20.16),
+    "area_grande_inf_der":  (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2 + 20.16),
+    "area_grande_borde_der": (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2),  # línea frontal del área, a la altura del punto de penal
     "centro_cancha":        (FIELD_LENGTH / 2, FIELD_WIDTH / 2),
     "mitad_linea_sup":      (FIELD_LENGTH / 2, 0.0),
     "mitad_linea_inf":      (FIELD_LENGTH / 2, FIELD_WIDTH),
@@ -57,6 +63,10 @@ REFERENCE_POINTS = {
 # Orden sugerido para calibración rápida (4 esquinas del área central,
 # suelen verse bien incluso con cámara desde el fondo)
 DEFAULT_ORDER = ["esquina_sup_izq", "esquina_sup_der", "esquina_inf_izq", "esquina_inf_der"]
+
+# Orden alternativo para cuando solo se ve la mitad derecha de la cancha
+# (ej: cámara panorámica que en cierto momento no llega a mostrar el arco izquierdo)
+RIGHT_HALF_ORDER = ["mitad_linea_sup", "mitad_linea_inf", "area_grande_sup_der", "area_grande_inf_der"]
 
 
 class CalibrationUI:
@@ -234,6 +244,11 @@ Ejemplos:
     parser.add_argument("--apply", type=str, default=None,
                          help="Ruta a un .parquet de coordenadas — si se pasa, aplica la calibración "
                               "existente en vez de abrir la ventana de calibración")
+    parser.add_argument("--points", type=str, default=None,
+                         help="Lista de puntos a usar para calibrar, separados por coma "
+                              "(ver REFERENCE_POINTS en este archivo). Ej: "
+                              "--points mitad_linea_sup,mitad_linea_inf,area_grande_sup_der,area_grande_inf_der "
+                              "Útil cuando no se ven las 4 esquinas completas de la cancha.")
     args = parser.parse_args()
 
     video_path = Path(args.video)
@@ -250,4 +265,10 @@ Ejemplos:
                       f"  Corré primero: python src/homography/calibrate.py {video_path}")
         apply_homography(coords_path, homography_path)
     else:
-        calibrate(video_path)
+        point_names = args.points.split(",") if args.points else None
+        if point_names:
+            invalid = [p for p in point_names if p not in REFERENCE_POINTS]
+            if invalid:
+                sys.exit(f"[ERROR] Puntos no reconocidos: {invalid}\n"
+                          f"  Opciones válidas: {list(REFERENCE_POINTS.keys())}")
+        calibrate(video_path, point_names=point_names)
