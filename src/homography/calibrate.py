@@ -16,6 +16,10 @@ Uso:
     # Paso 1: calibrar (una vez por video/ángulo de cámara)
     python src/homography/calibrate.py data/videos/partido.mp4
 
+    # Con puntos custom (cuando no se ven las 4 esquinas completas)
+    python src/homography/calibrate.py data/videos/partido.mp4 \
+        --points mitad_linea_sup,mitad_linea_inf,area_grande_sup_der,area_grande_inf_der
+
     # Paso 2: aplicar la calibración a las coordenadas ya detectadas
     python src/homography/calibrate.py data/videos/partido.mp4 --apply data/outputs/partido_coords.parquet
 """
@@ -36,6 +40,12 @@ OUTPUTS = ROOT / "data" / "outputs"
 FIELD_LENGTH = 105.0
 FIELD_WIDTH  = 68.0
 
+# Margen de tolerancia (metros) al filtrar detecciones fuera de la cancha.
+# Más chico = más estricto (filtra mejor banco/DTs/árbitros cerca de la línea,
+# pero puede descartar jugadores reales cerca del límite si la calibración
+# tiene algo de error). Más grande = más permisivo.
+OUT_OF_BOUNDS_MARGIN = 1.5
+
 # Puntos de referencia disponibles para calibrar — el usuario elige
 # cuáles 4 puede ver claramente en su video (no siempre se ve la cancha entera)
 REFERENCE_POINTS = {
@@ -49,23 +59,18 @@ REFERENCE_POINTS = {
     "area_chica_inf_izq":   (0.0, FIELD_WIDTH / 2 + 9.16),
     "area_grande_sup_izq":  (0.0, FIELD_WIDTH / 2 - 20.16),
     "area_grande_inf_izq":  (0.0, FIELD_WIDTH / 2 + 20.16),
-    # Lado derecho (arco derecho) — agregado para cámaras que solo ven la mitad de cancha
+    # Lado derecho (arco derecho) — para cámaras que solo ven la mitad de cancha
     "area_chica_sup_der":   (FIELD_LENGTH, FIELD_WIDTH / 2 - 9.16),
     "area_chica_inf_der":   (FIELD_LENGTH, FIELD_WIDTH / 2 + 9.16),
     "area_grande_sup_der":  (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2 - 20.16),
     "area_grande_inf_der":  (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2 + 20.16),
-    "area_grande_borde_der": (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2),  # línea frontal del área, a la altura del punto de penal
+    "area_grande_borde_der": (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2),
     "centro_cancha":        (FIELD_LENGTH / 2, FIELD_WIDTH / 2),
     "mitad_linea_sup":      (FIELD_LENGTH / 2, 0.0),
     "mitad_linea_inf":      (FIELD_LENGTH / 2, FIELD_WIDTH),
 }
 
-# Orden sugerido para calibración rápida (4 esquinas del área central,
-# suelen verse bien incluso con cámara desde el fondo)
 DEFAULT_ORDER = ["esquina_sup_izq", "esquina_sup_der", "esquina_inf_izq", "esquina_inf_der"]
-
-# Orden alternativo para cuando solo se ve la mitad derecha de la cancha
-# (ej: cámara panorámica que en cierto momento no llega a mostrar el arco izquierdo)
 RIGHT_HALF_ORDER = ["mitad_linea_sup", "mitad_linea_inf", "area_grande_sup_der", "area_grande_inf_der"]
 
 
@@ -76,7 +81,7 @@ class CalibrationUI:
         self.frame       = frame
         self.display     = frame.copy()
         self.point_names = point_names
-        self.clicks      = []  # lista de (x, y) en píxeles, en el mismo orden que point_names
+        self.clicks      = []
 
     def _on_mouse(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN and len(self.clicks) < len(self.point_names):
@@ -108,7 +113,6 @@ class CalibrationUI:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
     def run(self):
-        """Abre la ventana interactiva. Retorna los clics o None si se cancela."""
         window = "Calibracion - Analizador Tactico"
         cv2.namedWindow(window)
         cv2.setMouseCallback(window, self._on_mouse)
@@ -124,7 +128,7 @@ class CalibrationUI:
             elif key == ord("r"):
                 self.clicks = []
                 self._redraw()
-            elif key == 13 and len(self.clicks) == len(self.point_names):  # ENTER
+            elif key == 13 and len(self.clicks) == len(self.point_names):
                 cv2.destroyAllWindows()
                 return self.clicks
 
@@ -156,18 +160,15 @@ def calibrate(video_path: Path, point_names: list = None) -> Path:
     if pixel_points is None:
         sys.exit("[INFO] Calibración cancelada.")
 
-    # Puntos reales correspondientes (en metros)
     real_points = [REFERENCE_POINTS[name] for name in point_names]
 
-    # ── Calcular matriz de homografía ──────────────────────
     src = np.array(pixel_points, dtype=np.float32)
     dst = np.array(real_points, dtype=np.float32)
-    H, status = cv2.findHomography(src, dst, method=0)  # 4 puntos exactos, sin RANSAC
+    H, status = cv2.findHomography(src, dst, method=0)
 
     if H is None:
         sys.exit("[ERROR] No se pudo calcular la homografía. Revisá que los 4 puntos no sean colineales.")
 
-    # ── Guardar calibración ─────────────────────────────────
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUTS / f"{video_path.stem}_homography.json"
 
@@ -190,6 +191,9 @@ def apply_homography(coords_path: Path, homography_path: Path) -> Path:
     """
     Aplica una calibración guardada a un .parquet de coordenadas en píxeles,
     agregando columnas field_x, field_y en metros reales.
+
+    Filtra detecciones que caen fuera de la cancha (con margen OUT_OF_BOUNDS_MARGIN)
+    para descartar banco, cuerpo técnico, árbitros de línea fuera de juego, etc.
     """
     with open(homography_path) as f:
         calib = json.load(f)
@@ -197,47 +201,51 @@ def apply_homography(coords_path: Path, homography_path: Path) -> Path:
 
     df = pd.read_parquet(coords_path)
 
-    # Usamos el punto "feet_y" (pies del jugador) en vez del centro del bbox,
-    # porque es el punto que realmente toca el pasto — más preciso para homografía
     points = df[["cx", "feet_y"]].to_numpy(dtype=np.float32).reshape(-1, 1, 2)
     transformed = cv2.perspectiveTransform(points, H).reshape(-1, 2)
 
     df["field_x"] = transformed[:, 0].round(2)
     df["field_y"] = transformed[:, 1].round(2)
 
-    # Filtrar posiciones fuera de la cancha (± 5m de margen por error de calibración)
-    margin = 5.0
+    margin = OUT_OF_BOUNDS_MARGIN
     in_bounds = (
         (df["field_x"] >= -margin) & (df["field_x"] <= FIELD_LENGTH + margin) &
         (df["field_y"] >= -margin) & (df["field_y"] <= FIELD_WIDTH + margin)
     )
     n_out = (~in_bounds).sum()
+    n_total = len(df)
+
+    # Filtramos las detecciones fuera de cancha del resultado final
+    df_filtered = df[in_bounds].copy()
+
     if n_out > 0:
-        pct = n_out / len(df) * 100
-        print(f"[AVISO] {n_out} detecciones ({pct:.1f}%) cayeron fuera de la cancha.")
+        pct = n_out / n_total * 100
+        print(f"[INFO] {n_out} detecciones ({pct:.1f}%) descartadas por caer fuera de la cancha")
+        print(f"       (margen: {margin}m — filtra banco/cuerpo técnico/árbitros fuera de juego).")
         if pct > 15:
-            print("        Esto es alto — revisá la calibración, puede haber puntos mal marcados.")
+            print("        Este porcentaje es alto — revisá la calibración, puede haber puntos mal marcados.")
 
     out_path = coords_path.parent / f"{coords_path.stem}_field.parquet"
-    df.to_parquet(out_path, index=False)
+    df_filtered.to_parquet(out_path, index=False)
 
     print(f"\n✅ Coordenadas de cancha exportadas: {out_path.name}")
     print(f"   Nuevas columnas: field_x, field_y (metros, origen en esquina sup-izquierda)")
+    print(f"   {len(df_filtered)} de {n_total} detecciones conservadas.")
     return out_path
 
 
-# ── CLI ────────────────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Analizador Táctico — Calibración de homografía",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Ejemplos:
-  # Calibrar un video nuevo (abre ventana interactiva)
   python src/homography/calibrate.py data/videos/partido.mp4
 
-  # Aplicar una calibración ya hecha a las coordenadas detectadas
   python src/homography/calibrate.py data/videos/partido.mp4 --apply data/outputs/partido_coords.parquet
+
+  python src/homography/calibrate.py data/videos/partido.mp4 \\
+      --points mitad_linea_sup,mitad_linea_inf,area_grande_sup_der,area_grande_inf_der
         """,
     )
     parser.add_argument("video", type=str, help="Ruta al video .mp4 (para calibrar) o de referencia")
@@ -246,9 +254,7 @@ Ejemplos:
                               "existente en vez de abrir la ventana de calibración")
     parser.add_argument("--points", type=str, default=None,
                          help="Lista de puntos a usar para calibrar, separados por coma "
-                              "(ver REFERENCE_POINTS en este archivo). Ej: "
-                              "--points mitad_linea_sup,mitad_linea_inf,area_grande_sup_der,area_grande_inf_der "
-                              "Útil cuando no se ven las 4 esquinas completas de la cancha.")
+                              "(ver REFERENCE_POINTS en este archivo).")
     args = parser.parse_args()
 
     video_path = Path(args.video)

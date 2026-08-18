@@ -1,122 +1,161 @@
 """
-Analizador Táctico — Módulo de Inferencia
-==========================================
-Corre YOLOv8 + ByteTrack sobre un video de partido y exporta:
+Analizador Táctico — Módulo de Inferencia (Roboflow)
+======================================================
+Corre el modelo custom entrenado en Roboflow (RF-DETR Small, 4 clases:
+player/goalkeeper/referee/ball) + ByteTrack (vía supervision) sobre un
+video de partido. Reproduce en Python la misma lógica que se validó en
+el Workflow de Roboflow:
+  - Filtro de confianza por clase
+  - Resolución de superposición goalkeeper/player (se descarta el
+    duplicado "player" cuando se superpone con un "goalkeeper")
+
+Exporta:
   - Video anotado con bounding boxes, track IDs y clase (color por rol)
   - Archivo .parquet con coordenadas frame a frame
 
-Soporta dos modelos:
-  - yolov8n.pt genérico (COCO)         → detecta solo "persona"
-  - modelo custom entrenado en fútbol  → detecta jugador/arquero/árbitro/pelota
-    (ver scripts/train_kaggle.py para entrenarlo)
+Requiere:
+    pip install inference supervision opencv-python
 
 Uso:
-    python src/detection/run_inference.py data/videos/partido.mp4
-    python src/detection/run_inference.py data/videos/partido.mp4 --preview
-    python src/detection/run_inference.py data/videos/partido.mp4 --skip 3
-    python src/detection/run_inference.py data/videos/partido.mp4 --model models/football_yolo_v1.pt
+    export ROBOFLOW_API_KEY="tu-api-key"
+    python src/detection/run_inference.py data/videos/partido_clip.mp4
+    python src/detection/run_inference.py data/videos/partido_clip.mp4 --skip 1
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 import cv2
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from ultralytics import YOLO
 
 # ── Rutas base ─────────────────────────────────────────────
-ROOT       = Path(__file__).resolve().parents[2]
-OUTPUTS    = ROOT / "data" / "outputs"
+ROOT    = Path(__file__).resolve().parents[2]
+OUTPUTS = ROOT / "data" / "outputs"
 
-# ── Configuración del modelo ───────────────────────────────
-DEFAULT_MODEL   = "yolov8n.pt"   # Nano genérico: fallback si no hay modelo custom
-CONF_THRESHOLD  = 0.40           # detecciones por debajo de esto se descartan
+# Cache persistente de pesos — evita que se pierdan al reiniciar la compu
+os.environ.setdefault("MODEL_CACHE_DIR", str(ROOT / "models" / "roboflow_cache"))
 
-# Clases del modelo genérico COCO (fallback)
-COCO_PERSON_CLASS = 0
+# ── Configuración del modelo ────────────────────────────────
+MODEL_ID = "santiago-lorenzatti/amateur-soccer-tactical-analysis-1-rfdetr-small-t1"
 
-# Clases del modelo custom entrenado en fútbol (ver train_kaggle.py)
-# Confirmado tras el entrenamiento (ver log): names: {0: 'football', 1: 'player'}
-# El dataset NO distingue arquero/árbitro — todo lo humano cae en "player".
-FOOTBALL_CLASSES = {0: "football", 1: "player"}
-FOOTBALL_TRACK_CLASSES = [1]         # trackeamos jugadores; la pelota se detecta pero no se trackea con ID
-FOOTBALL_BALL_CLASS    = 0
+# Mismos umbrales validados en el Workflow de Roboflow
+CONF_THRESHOLDS = {
+    "ball":       0.20,
+    "player":     0.40,
+    "goalkeeper": 0.40,
+    "referee":    0.60,
+}
+DEFAULT_CONF = 0.40  # fallback por si aparece alguna clase no mapeada
 
-# Colores por rol (BGR, para cv2) — usados solo si se dibuja anotación custom
+# Umbral de superposición para descartar el "player" duplicado sobre un "goalkeeper"
+GOALKEEPER_OVERLAP_IOU = 0.50
+
 CLASS_COLORS = {
-    "player":     (60, 60, 220),   # rojo — todos los humanos (no distingue arquero/árbitro)
-    "football":   (255, 255, 255), # blanco — la pelota
-    "person":     (60, 60, 220),   # fallback modelo genérico
+    "player":     (60, 60, 220),    # rojo
+    "goalkeeper": (30, 170, 250),   # naranja
+    "referee":    (0, 210, 210),    # amarillo
+    "ball":       (255, 255, 255),  # blanco
 }
 
 
-def _is_custom_model(model_path: str) -> bool:
-    """Un modelo custom es cualquiera que no sea el nombre genérico de Ultralytics."""
-    return not Path(model_path).name.startswith("yolov8") or "/" in model_path or "\\" in model_path
+def _lazy_imports():
+    """Importa inference/supervision recién acá, con mensaje claro si faltan instalar."""
+    try:
+        from inference import get_model
+        import supervision as sv
+    except ImportError:
+        sys.exit(
+            "[ERROR] Faltan dependencias. Instalá con:\n"
+            "  pip install inference supervision opencv-python"
+        )
+    return get_model, sv
 
 
-def run(video_path: Path, frame_skip: int = 2, show_preview: bool = False,
-        model_path: str = DEFAULT_MODEL) -> Path:
+def _iou(box_a, box_b) -> float:
+    """Intersection-over-Union entre dos bounding boxes [x1,y1,x2,y2]."""
+    xa1, ya1, xa2, ya2 = box_a
+    xb1, yb1, xb2, yb2 = box_b
+    inter_x1, inter_y1 = max(xa1, xb1), max(ya1, yb1)
+    inter_x2, inter_y2 = min(xa2, xb2), min(ya2, yb2)
+    inter_w, inter_h = max(0, inter_x2 - inter_x1), max(0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    if inter_area == 0:
+        return 0.0
+    area_a = (xa2 - xa1) * (ya2 - ya1)
+    area_b = (xb2 - xb1) * (yb2 - yb1)
+    return inter_area / (area_a + area_b - inter_area)
+
+
+def _filter_and_clean(boxes, confs, class_names) -> np.ndarray:
     """
-    Pipeline principal de inferencia.
+    Aplica, en este orden:
+      1. Filtro de confianza por clase (CONF_THRESHOLDS)
+      2. Resolución de superposición: si un "player" se superpone con un
+         "goalkeeper" con IoU >= GOALKEEPER_OVERLAP_IOU, se descarta el "player"
 
-    Parámetros
-    ----------
-    video_path   : ruta al archivo .mp4 del partido
-    frame_skip   : procesar 1 de cada N frames (2 = mitad de frames, ~2x más rápido)
-    show_preview : mostrar ventana en tiempo real (más lento, útil para debug)
-    model_path   : ruta al .pt — genérico ("yolov8n.pt") o custom entrenado en fútbol
-
-    Retorna
-    -------
-    Path al archivo .parquet con las coordenadas exportadas
+    Retorna un array booleano (keep_mask) del mismo largo que boxes.
     """
+    n = len(boxes)
+    keep = np.array([
+        confs[i] >= CONF_THRESHOLDS.get(class_names[i], DEFAULT_CONF)
+        for i in range(n)
+    ])
+
+    gk_idx = [i for i in range(n) if keep[i] and class_names[i] == "goalkeeper"]
+    pl_idx = [i for i in range(n) if keep[i] and class_names[i] == "player"]
+
+    for gi in gk_idx:
+        for pi in pl_idx:
+            if keep[pi] and _iou(boxes[gi], boxes[pi]) >= GOALKEEPER_OVERLAP_IOU:
+                keep[pi] = False  # descarta el duplicado "player"
+
+    return keep
+
+
+def run(video_path: Path, frame_skip: int = 2, api_key: str = None) -> Path:
+    get_model, sv = _lazy_imports()
+
+    api_key = api_key or os.environ.get("ROBOFLOW_API_KEY")
+    if not api_key:
+        sys.exit(
+            "[ERROR] Falta la API key de Roboflow.\n"
+            "  export ROBOFLOW_API_KEY=\"tu-api-key\""
+        )
+
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     stem = video_path.stem
-    custom = _is_custom_model(model_path)
 
-    # ── 1. Cargar modelo ───────────────────────────────────
-    print(f"\n[1/4] Cargando {model_path} {'(custom fútbol)' if custom else '(genérico COCO)'}...")
-    model = YOLO(model_path)
-    # yolov8n.pt se descarga automáticamente la primera vez (~6 MB) si no existe
+    print(f"\n[1/4] Cargando modelo {MODEL_ID}...")
+    print("       (primera vez: descarga y cachea los pesos localmente)")
+    model = get_model(model_id=MODEL_ID, api_key=api_key)
+    tracker = sv.ByteTrack()
 
-    # Determinar qué clases trackear según el tipo de modelo
-    if custom:
-        track_classes = FOOTBALL_TRACK_CLASSES
-        class_names   = FOOTBALL_CLASSES
-    else:
-        track_classes = [COCO_PERSON_CLASS]
-        class_names   = {COCO_PERSON_CLASS: "person"}
-
-    # ── 2. Abrir video ─────────────────────────────────────
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         sys.exit(f"[ERROR] No se pudo abrir el video: {video_path}")
 
-    fps         = cap.get(cv2.CAP_PROP_FPS)
-    width       = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps          = cap.get(cv2.CAP_PROP_FPS)
+    width        = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height       = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration_min = total_frames / fps / 60
 
     print(f"[2/4] Video abierto: {width}x{height} @ {fps:.1f} fps")
-    print(f"       Duración: {duration_min:.1f} min — {total_frames} frames totales")
-    print(f"       Procesando 1 de cada {frame_skip} frames (~{total_frames//frame_skip} inferencias)\n")
+    print(f"       Procesando 1 de cada {frame_skip} frames\n")
 
-    # ── 3. Configurar writer de salida ────────────────────
     out_video_path  = OUTPUTS / f"{stem}_tracked.mp4"
     out_coords_path = OUTPUTS / f"{stem}_coords.parquet"
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (width, height))
 
-    # ── 4. Loop de inferencia ─────────────────────────────
-    print("[3/4] Corriendo inferencia...")
-    records   = []
+    records = []
     frame_idx = 0
 
+    print("[3/4] Corriendo inferencia...")
     with tqdm(total=total_frames, desc="Frames", unit="fr", ncols=70) as pbar:
         while cap.isOpened():
             ret, frame = cap.read()
@@ -126,100 +165,69 @@ def run(video_path: Path, frame_skip: int = 2, show_preview: bool = False,
             frame_idx += 1
             pbar.update(1)
 
-            # Frames salteados: escribir sin anotar para mantener duración del video
             if frame_idx % frame_skip != 0:
                 writer.write(frame)
                 continue
 
-            # ── Detección + Tracking (ByteTrack) ──────────
-            results = model.track(
-                frame,
-                persist=True,               # ByteTrack mantiene IDs entre llamadas
-                tracker="bytetrack.yaml",   # bundled con Ultralytics
-                classes=track_classes,      # personas (+ arquero/árbitro si es modelo custom)
-                conf=CONF_THRESHOLD,
-                verbose=False,
-            )
+            # ── Detección ───────────────────────────────────
+            results = model.infer(frame)[0]
+            detections = sv.Detections.from_inference(results)
 
-            result = results[0]
+            class_names = [results.predictions[i].class_name for i in range(len(detections))] \
+                if hasattr(results, "predictions") else list(detections.data.get("class_name", []))
 
-            # ── Dibujar anotación ──────────────────────────
-            if custom:
-                # Dibujo manual con color por rol (más claro que el genérico de Ultralytics)
-                annotated = frame.copy()
-                if result.boxes is not None:
-                    for box in result.boxes:
-                        cls_id = int(box.cls[0])
-                        name   = class_names.get(cls_id, "?")
-                        color  = CLASS_COLORS.get(name, (200, 200, 200))
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                        tid = int(box.id[0]) if box.id is not None else -1
-                        label = f"{name} #{tid}" if tid != -1 else name
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                        cv2.putText(annotated, label, (x1, max(y1 - 6, 10)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-            else:
-                annotated = result.plot()   # frame con bboxes + IDs (estilo default Ultralytics)
+            # Fallback si supervision ya trae class_name en .data
+            if not class_names and "class_name" in detections.data:
+                class_names = list(detections.data["class_name"])
 
-            # ── Extraer y guardar coordenadas ──────────────
-            if result.boxes is not None and result.boxes.id is not None:
-                boxes     = result.boxes.xyxy.cpu().numpy()
-                track_ids = result.boxes.id.cpu().numpy().astype(int)
-                confs     = result.boxes.conf.cpu().numpy()
-                cls_ids   = result.boxes.cls.cpu().numpy().astype(int)
+            boxes = detections.xyxy
+            confs = detections.confidence if detections.confidence is not None else np.ones(len(boxes))
 
-                for tid, (x1, y1, x2, y2), conf, cls_id in zip(track_ids, boxes, confs, cls_ids):
-                    records.append({
-                        "frame":      frame_idx,
-                        "time_sec":   round(frame_idx / fps, 2),
-                        "track_id":   int(tid),
-                        "class_name": class_names.get(int(cls_id), "unknown"),
-                        # Bounding box completo
-                        "x1": round(float(x1), 1),
-                        "y1": round(float(y1), 1),
-                        "x2": round(float(x2), 1),
-                        "y2": round(float(y2), 1),
-                        # Centro del bbox (útil para homografía más adelante)
-                        "cx": round((x1 + x2) / 2, 1),
-                        # Pies del jugador = y2 (bottom del bbox)
-                        # Usaremos este punto para proyectar en el mapa 2D
-                        "feet_y": round(float(y2), 1),
-                        "conf": round(float(conf), 3),
-                    })
+            # ── Filtro de confianza + resolución de superposición ──
+            if len(boxes) > 0:
+                keep_mask = _filter_and_clean(boxes, confs, class_names)
+                detections = detections[keep_mask]
+                class_names = [c for c, k in zip(class_names, keep_mask) if k]
 
-            # ── Pelota: se detecta pero no se trackea (sin ID persistente) ──
-            if custom and result.boxes is not None:
-                for box in result.boxes:
-                    if int(box.cls[0]) == FOOTBALL_BALL_CLASS:
-                        bx1, by1, bx2, by2 = box.xyxy[0].cpu().numpy()
-                        records.append({
-                            "frame": frame_idx, "time_sec": round(frame_idx / fps, 2),
-                            "track_id": -1, "class_name": "ball",
-                            "x1": round(float(bx1), 1), "y1": round(float(by1), 1),
-                            "x2": round(float(bx2), 1), "y2": round(float(by2), 1),
-                            "cx": round((bx1 + bx2) / 2, 1),
-                            "feet_y": round(float(by2), 1),
-                            "conf": round(float(box.conf[0]), 3),
-                        })
+            # ── Tracking (ByteTrack, vía supervision) ──────
+            detections = tracker.update_with_detections(detections)
+
+            # ── Dibujar anotación ───────────────────────────
+            annotated = frame.copy()
+            for i in range(len(detections)):
+                x1, y1, x2, y2 = detections.xyxy[i].astype(int)
+                tid  = int(detections.tracker_id[i]) if detections.tracker_id is not None else -1
+                name = class_names[i] if i < len(class_names) else "unknown"
+                color = CLASS_COLORS.get(name, (200, 200, 200))
+                label = f"{name} #{tid}" if tid != -1 else name
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(annotated, label, (x1, max(y1 - 6, 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                # ── Guardar coordenadas ─────────────────────
+                records.append({
+                    "frame":      frame_idx,
+                    "time_sec":   round(frame_idx / fps, 2),
+                    "track_id":   tid,
+                    "class_name": name,
+                    "x1": round(float(x1), 1), "y1": round(float(y1), 1),
+                    "x2": round(float(x2), 1), "y2": round(float(y2), 1),
+                    "cx": round((x1 + x2) / 2, 1),
+                    "feet_y": round(float(y2), 1),  # punto de apoyo en el pasto
+                    "conf": round(float(detections.confidence[i]), 3)
+                             if detections.confidence is not None else None,
+                })
 
             writer.write(annotated)
 
-            if show_preview:
-                cv2.imshow("Analizador Táctico — preview (Q para salir)", annotated)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    print("\n[INFO] Preview interrumpido por el usuario.")
-                    break
-
     cap.release()
     writer.release()
-    cv2.destroyAllWindows()
 
-    # ── 5. Exportar coordenadas ────────────────────────────
     print("\n[4/4] Exportando coordenadas...")
     df = pd.DataFrame(records)
 
     if df.empty:
-        print("[ADVERTENCIA] No se detectaron jugadores. Revisá la resolución o el conf_threshold.")
+        print("[ADVERTENCIA] No se detectaron objetos.")
     else:
         df.to_parquet(out_coords_path, index=False)
         _print_summary(df, out_video_path, out_coords_path)
@@ -228,72 +236,39 @@ def run(video_path: Path, frame_skip: int = 2, show_preview: bool = False,
 
 
 def _print_summary(df: pd.DataFrame, video_out: Path, coords_out: Path) -> None:
-    """Imprime resumen legible de los resultados."""
-    # IDs de tracking reales (excluye la pelota, que se guarda con track_id=-1)
-    tracked = df[df["track_id"] != -1]
-    n_ids   = tracked["track_id"].nunique()
-    n_dets  = len(df)
-    dur_sec = df["time_sec"].max()
+    tracked = df[(df["track_id"] != -1) & (df["class_name"] != "ball")]
+    n_ids  = tracked["track_id"].nunique()
+    n_dets = len(df)
+    dur    = df["time_sec"].max()
 
     print("\n" + "═" * 50)
     print("  RESULTADO DEL PROCESAMIENTO")
     print("═" * 50)
-    print(f"  IDs de tracking únicos : {n_ids}")
-    print(f"  Total de detecciones   : {n_dets:,}")
-    print(f"  Duración procesada     : {dur_sec:.1f} seg")
-    print(f"  Promedio det/frame     : {n_dets / df['frame'].nunique():.1f}")
-
-    if "class_name" in df.columns and df["class_name"].nunique() > 1:
-        print("─" * 50)
-        print("  Detecciones por clase:")
-        for name, count in df["class_name"].value_counts().items():
-            print(f"    {name:<12} {count:,}")
-
+    print(f"  IDs de tracking únicos (sin pelota) : {n_ids}")
+    print(f"  Total de detecciones                : {n_dets:,}")
+    print(f"  Duración procesada                  : {dur:.1f} seg")
+    print("─" * 50)
+    print("  Detecciones por clase:")
+    for name, count in df["class_name"].value_counts().items():
+        print(f"    {name:<12} {count:,}")
     print("─" * 50)
     print(f"  Video anotado → {video_out.name}")
     print(f"  Coordenadas   → {coords_out.name}")
     print("═" * 50)
 
-    if n_ids > 30:
-        print(f"\n[AVISO] Se detectaron {n_ids} IDs — puede haber fragmentación.")
-        print("  Causa probable: oclusiones o cambios de perspectiva.")
-        print("  Ajuste: bajar conf a 0.35 o revisar la posición de cámara.")
-    elif n_ids < 15:
-        print(f"\n[AVISO] Solo {n_ids} IDs detectados — puede haber subdetección.")
-        print("  Causa probable: resolución baja o jugadores muy pequeños en frame.")
-        print("  Ajuste: bajar conf a 0.30, o si usás yolov8n genérico, migrar al modelo")
-        print("  custom entrenado en fútbol (ver scripts/train_kaggle.py).")
 
-
-# ── CLI ────────────────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Analizador Táctico — Inferencia YOLOv8 + ByteTrack",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Ejemplos:
-  python src/detection/run_inference.py data/videos/partido.mp4
-  python src/detection/run_inference.py data/videos/partido.mp4 --skip 3
-  python src/detection/run_inference.py data/videos/partido.mp4 --preview
-  python src/detection/run_inference.py data/videos/partido.mp4 --model models/football_yolo_v1.pt
-        """,
+        description="Analizador Táctico — Inferencia con modelo Roboflow (4 clases)",
     )
-    parser.add_argument("video",     type=str,            help="Ruta al video .mp4")
-    parser.add_argument("--skip",    type=int, default=2, help="Procesar 1 de cada N frames (default: 2)")
-    parser.add_argument("--preview", action="store_true", help="Mostrar preview en vivo (debug)")
-    parser.add_argument("--model",   type=str, default=DEFAULT_MODEL,
-                         help="Ruta al modelo .pt (default: yolov8n.pt genérico). "
-                              "Usar el .pt de scripts/train_kaggle.py para detección multi-clase.")
+    parser.add_argument("video", type=str, help="Ruta al video .mp4")
+    parser.add_argument("--skip", type=int, default=2, help="Procesar 1 de cada N frames")
+    parser.add_argument("--api-key", type=str, default=None,
+                         help="API key de Roboflow (o usar variable ROBOFLOW_API_KEY)")
     args = parser.parse_args()
 
     path = Path(args.video)
     if not path.exists():
         sys.exit(f"[ERROR] Archivo no encontrado: {path}")
-    if path.suffix.lower() != ".mp4":
-        print(f"[AVISO] La extensión es '{path.suffix}', se esperaba '.mp4'.")
 
-    if args.model != DEFAULT_MODEL and not Path(args.model).exists():
-        sys.exit(f"[ERROR] Modelo no encontrado: {args.model}\n"
-                  f"  ¿Ya bajaste el best.pt de Kaggle y lo copiaste ahí?")
-
-    run(path, frame_skip=args.skip, show_preview=args.preview, model_path=args.model)
+    run(path, frame_skip=args.skip, api_key=args.api_key)

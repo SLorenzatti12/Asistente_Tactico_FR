@@ -24,3 +24,4 @@ build/
 Thumbs.db
 .env
 *.log
+models/roboflow_cache/
