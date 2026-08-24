@@ -1,0 +1,46 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Data / media
+*.mp4
+*.avi
+*.mov
+*.mkv
+data/
+outputs/
+runs/
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+*.weights
