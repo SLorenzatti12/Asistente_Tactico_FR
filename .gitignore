@@ -1,46 +1,51 @@
-# Virtual environment
-venv/
-.venv/
-env/
+# ── Datos / media — NO subir al repo ──────────────────────
+data/videos/
+data/outputs/
+data/db/
+outputs/
+runs/
+*.mp4
+*.avi
+*.mov
+*.mkv
 
-# Python
+# ── Pesos del modelo ──────────────────────────────────────
+*.pt
+*.pth
+*.onnx
+*.engine
+*.weights
+models/roboflow_cache/
+
+# ── Python ────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 *.egg-info/
+.eggs/
 dist/
 build/
-.eggs/
 
-# Environment variables
+# ── Entornos virtuales ────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Variables de entorno ──────────────────────────────────
 .env
 .env.local
 
-# IDE
+# ── Streamlit ─────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── IDE ───────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
+# ── Sistema ───────────────────────────────────────────────
 .DS_Store
 Thumbs.db
-
-# Streamlit
-.streamlit/secrets.toml
-
-# Data / media
-*.mp4
-*.avi
-*.mov
-*.mkv
-data/
-outputs/
-runs/
-
-# Model weights
-*.pt
-*.pth
-*.onnx
-*.weights
+*.log
