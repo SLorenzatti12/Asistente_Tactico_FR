@@ -1,0 +1,51 @@
+# ── Datos / media — NO subir al repo ──────────────────────
+data/videos/
+data/outputs/
+data/db/
+outputs/
+runs/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# ── Pesos del modelo ──────────────────────────────────────
+*.pt
+*.pth
+*.onnx
+*.engine
+*.weights
+models/roboflow_cache/
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# ── Entornos virtuales ────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Variables de entorno ──────────────────────────────────
+.env
+.env.local
+
+# ── Streamlit ─────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── IDE ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Sistema ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.log

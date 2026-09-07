@@ -1,6 +1,16 @@
-ultralytics==8.1.0
-opencv-python==4.9.0.80
-streamlit==1.31.0
-pandas==2.2.0
-moviepy==1.0.3
-plotly==5.18.0
+# ── Core IA / Visión ───────────────────────────────────────
+ultralytics>=8.2.0       # YOLOv8 + ByteTrack incluido
+opencv-python>=4.9.0     # captura y manipulación de video
+
+# ── Datos ──────────────────────────────────────────────────
+pandas>=2.1.0
+pyarrow>=14.0.0          # formato .parquet para coordenadas
+
+# ── Interfaz y visualización ───────────────────────────────
+streamlit>=1.32.0
+plotly>=5.20.0           # mapa 2D interactivo
+
+# ── Utilitarios ────────────────────────────────────────────
+tqdm>=4.66.0             # barra de progreso
+yt-dlp>=2024.1.0         # descarga de videos de YouTube
+pyyaml>=6.0               # lectura de data.yaml (solo si se entrena modelo custom)
