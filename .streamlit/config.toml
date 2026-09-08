@@ -1,0 +1,62 @@
+# Analizador Táctico — tema nativo de Streamlit
+# ================================================
+# Estos 4 valores (primaryColor, backgroundColor, secondaryBackgroundColor,
+# textColor) deben coincidir siempre con BG_COLOR / BG_SECONDARY / TEXT_COLOR /
+# ACCENT_COLOR de app/theme.py — es la misma paleta, duplicada a mano porque
+# Streamlit no permite leer este archivo desde Python. Si se cambia acá,
+# cambiar también en theme.py (y viceversa).
+#
+# base = "dark" fija un solo modo (sin toggle claro/oscuro en el menú): la
+# app está pensada para verse sobre fondo oscuro — video y cancha en verde
+# se leen mejor así — y es el estándar de los tableros deportivos/analíticos.
+
+[server]
+# Sirve archivos desde app/static/ bajo la URL /app/static/<...> (con soporte
+# de range requests, necesario para poder arrastrar la barra del video). Lo
+# usa components/video_sync.py para exponerle el video al reproductor
+# sincronizado — ver la nota en ese módulo y en .gitignore sobre app/static/.
+enableStaticServing = true
+
+[theme]
+base = "dark"
+
+primaryColor = "#b45309"              # ámbar — botones y elementos activos
+backgroundColor = "#0e1117"           # fondo principal
+secondaryBackgroundColor = "#181c25"  # widgets, tarjetas, sidebar
+textColor = "#e6e9ef"                 # blanco cálido, no puro
+linkColor = "#d97706"
+borderColor = "#2a2f3a"
+
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
+baseFontSize = 15
+linkUnderline = false
+
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "8px"
+buttonRadius = "8px"
+
+# Colores de estado — mismos valores que STATUS_COLORS / ZONE_COLORS en theme.py
+redColor = "#ef4444"
+orangeColor = "#f59e0b"
+yellowColor = "#eab308"
+greenColor = "#22c55e"
+blueColor = "#3b82f6"
+violetColor = "#8b5cf6"
+grayColor = "#6b7280"
+
+# Paleta categórica para gráficos nativos (st.bar_chart, etc.) — los charts
+# Plotly de la app usan sus propios colores explícitos (theme.ZONE_COLORS,
+# TEAM_COLORS), esto es solo para consistencia si se agrega un chart nativo.
+chartCategoricalColors = ["#3b82f6", "#22c55e", "#ef4444", "#f59e0b", "#8b5cf6", "#eab308", "#6b7280"]
+
+dataframeBorderColor = "#2a2f3a"
+dataframeHeaderBackgroundColor = "#181c25"
+
+[theme.sidebar]
+backgroundColor = "#12151c"
+secondaryBackgroundColor = "#181c25"
+textColor = "#e6e9ef"
+borderColor = "#2a2f3a"
+primaryColor = "#b45309"

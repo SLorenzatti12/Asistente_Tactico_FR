@@ -1,26 +1,57 @@
-# ── Datos — NO subir al repo ──────────────────────────────
+# ── Datos / media — NO subir al repo ──────────────────────
 data/videos/
 data/outputs/
 data/db/
+outputs/
+runs/
+*.mp4
+*.avi
+*.mov
+*.mkv
 
 # ── Pesos del modelo ──────────────────────────────────────
 *.pt
+*.pth
 *.onnx
 *.engine
+*.weights
+models/roboflow_cache/
 
 # ── Python ────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# ── Entornos virtuales ────────────────────────────────────
 venv/
 .venv/
 env/
-*.egg-info/
-dist/
-build/
+
+# ── Variables de entorno ──────────────────────────────────
+.env
+.env.local
+
+# ── Streamlit ─────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# app/static/ la genera automáticamente components/video_sync.py en tiempo
+# de ejecución (hardlink del video servido al reproductor sincronizado del
+# dashboard) — no es código fuente, no se commitea. Si te aparece en
+# `git status`, es esperable, no hace falta agregarla.
+app/static/
+
+# ── IDE ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # ── Sistema ───────────────────────────────────────────────
 .DS_Store
 Thumbs.db
-.env
 *.log
