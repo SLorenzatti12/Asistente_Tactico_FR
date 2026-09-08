@@ -33,17 +33,22 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-FIELD_LENGTH = 105  # eje x — arco a arco
-FIELD_WIDTH = 68    # eje y — lateral a lateral
+# Paleta e identidad visual centralizadas en theme.py — ver ese módulo para
+# la explicación de por qué estos valores viven ahí y no acá.
+from theme import (
+    BALL_COLOR,
+    FIELD_BG,
+    FIELD_LENGTH,
+    FIELD_LINES,
+    FIELD_WIDTH,
+    TEAM_COLORS,
+    TEAM_LABELS,
+    UNKNOWN_COLOR,
+    plotly_layout_base,
+)
 
 # Umbral del test de outliers de Iglewicz-Hoaglin sobre el z-score robusto.
 _MAD_Z_THRESHOLD = 3.5
-
-# ── Colores ──────────────────────────────────────────────────
-TEAM_COLORS = {"home": "#1f77b4", "away": "#d62728"}   # azul local / rojo visitante
-TEAM_LABELS = {"home": "🔵 Local", "away": "🔴 Visitante"}
-UNKNOWN_COLOR = "#9e9e9e"   # jugador sin equipo asignado
-BALL_COLOR = "#ffffff"
 
 
 # ── Helpers de datos ─────────────────────────────────────────
@@ -172,14 +177,14 @@ def _block_metrics(players_df: pd.DataFrame) -> dict | None:
 def _draw_field_shapes(fig: go.Figure) -> go.Figure:
     """Dibuja las líneas de la cancha (perímetro, mitad, círculo central)."""
     # TODO Nico: agregar áreas grande/chica y arcos en un sprint futuro.
-    line = dict(color="white", width=2)
+    line = dict(color=FIELD_LINES, width=2)
     fig.add_shape(type="rect", x0=0, y0=0, x1=FIELD_LENGTH, y1=FIELD_WIDTH, line=line)
     fig.add_shape(type="line", x0=FIELD_LENGTH / 2, y0=0, x1=FIELD_LENGTH / 2, y1=FIELD_WIDTH,
-                  line=dict(color="white", width=1))
+                  line=dict(color=FIELD_LINES, width=1))
     fig.add_shape(type="circle",
                   x0=FIELD_LENGTH / 2 - 9.15, y0=FIELD_WIDTH / 2 - 9.15,
                   x1=FIELD_LENGTH / 2 + 9.15, y1=FIELD_WIDTH / 2 + 9.15,
-                  line=dict(color="white", width=1))
+                  line=dict(color=FIELD_LINES, width=1))
     return fig
 
 
@@ -219,9 +224,9 @@ def _add_players_by_team(fig: go.Figure, players: pd.DataFrame) -> None:
             mode="markers+text",
             text=sub["track_id"].astype(str),
             textposition="top center",
-            textfont=dict(color="white", size=9),
+            textfont=dict(color=FIELD_LINES, size=9),
             marker=dict(size=14, color=_team_color(team_key),
-                        line=dict(color="white", width=1)),
+                        line=dict(color=FIELD_LINES, width=1)),
             name=TEAM_LABELS.get(team_key, "Sin equipo"),
             hovertemplate="track %{text}<extra></extra>",
         ))
@@ -234,10 +239,10 @@ def _add_players_by_track(fig: go.Figure, players: pd.DataFrame) -> None:
         mode="markers+text",
         text=players["track_id"].astype(str),
         textposition="top center",
-        textfont=dict(color="white", size=9),
+        textfont=dict(color=FIELD_LINES, size=9),
         marker=dict(size=14,
                     color=[_track_color(t) for t in players["track_id"]],
-                    line=dict(color="white", width=1)),
+                    line=dict(color=FIELD_LINES, width=1)),
         showlegend=False,
         hovertemplate="track %{text}<extra></extra>",
     ))
@@ -272,16 +277,21 @@ def render_map(df: pd.DataFrame, current_time: float) -> None:
                 name="Pelota", hoverinfo="skip",
             ))
 
+    # Tipografía/margen/alto salen de la base común; plot_bgcolor/paper_bgcolor
+    # se pisan con el verde de cancha (no el fondo oscuro genérico) y los ejes
+    # se ocultan del todo en una segunda llamada — acá no aplica la grilla.
+    fig.update_layout(**plotly_layout_base(
+        plot_bgcolor=FIELD_BG, paper_bgcolor=FIELD_BG,
+        margin=dict(l=0, r=0, t=10, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(color=FIELD_LINES)),
+        showlegend=has_team,
+    ))
     fig.update_layout(
         xaxis=dict(range=[-2, FIELD_LENGTH + 2], showgrid=False, zeroline=False, visible=False),
         yaxis=dict(range=[-2, FIELD_WIDTH + 2], showgrid=False, zeroline=False, visible=False,
                    scaleanchor="x"),
-        plot_bgcolor="#2d7d3a", paper_bgcolor="#2d7d3a",
-        height=420, margin=dict(l=0, r=0, t=10, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(color="white")),
-        showlegend=has_team,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def _render_team_metrics(label: str, players_df: pd.DataFrame) -> None:

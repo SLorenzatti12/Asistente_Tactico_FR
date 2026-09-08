@@ -53,3 +53,10 @@ El sistema auto-genera e implementa la siguiente arquitectura de directorios loc
 │   └── videos/                 # Videos crudos .mp4 de los partidos (Ignorados en Git)
 └── output/
     └── clips/                  # Recortes de video generados por el tagueo (Ignorados en Git)
+```
+
+---
+
+## 🧩 Notas de desarrollo
+
+* **`app/static/` es generada, no la toques a mano.** Aparece sola cuando corrés el dashboard (`components/video_sync.py` la usa para exponerle el video al reproductor sincronizado con el mapa — es un hardlink al video real, no una copia). Ya está en `.gitignore`: si te aparece en tu `git status`, es esperable, no hace falta agregarla ni commitearla.

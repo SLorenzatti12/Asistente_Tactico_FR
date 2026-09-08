@@ -10,6 +10,8 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 
+from theme import STATUS_COLORS
+
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "db" / "analizador.sqlite"
 
 TAG_TYPES = ["Presión", "Salida", "Transición", "Pelota parada"]
@@ -89,12 +91,36 @@ def render_tagging_panel() -> None:
 
     cols = st.columns(2)
     for i, tag in enumerate(TAG_TYPES):
-        if cols[i % 2].button(tag, use_container_width=True):
+        # type="primary" = color de acento del tema (ACCENT_COLOR en theme.py):
+        # son la acción principal de este panel, así que llevan el color fuerte.
+        if cols[i % 2].button(tag, type="primary", width="stretch"):
             save_event(match_name, tag, current_time)
             st.toast(f"Tag guardado: {tag} @ {current_time}s")
 
     # TODO: reemplazar por lectura real de la tabla `events`
     st.caption("Log de eventos — placeholder, conectar a SQLite")
+
+
+def _inject_semaforo_css() -> None:
+    """
+    Colorea los tres botones del semáforo (🔴🟡🟢) con los colores de estado
+    del tema. Cada botón tiene su propio `key` por jugador (low_3, low_7, ...),
+    así que el selector usa "contiene" ([class*=...]) para pegarle a todos los
+    de un mismo rating con una sola regla, en vez de generar una por jugador.
+
+    Nota: `.st-key-<key>` es la clase que Streamlit genera a partir del `key`
+    del widget — ver "Never use CSS for theming" en la guía de temas: acá se
+    usa CSS a propósito porque st.button no tiene un parámetro de color propio
+    (solo type="primary"/"secondary"), y los 3 colores del semáforo no
+    coinciden con la paleta de tipos de botón.
+    """
+    st.markdown(f"""
+    <style>
+      div[class*="st-key-low_"] button {{ border-color: {STATUS_COLORS["critico"]}; }}
+      div[class*="st-key-mid_"] button {{ border-color: {STATUS_COLORS["alerta"]}; }}
+      div[class*="st-key-high_"] button {{ border-color: {STATUS_COLORS["ok"]}; }}
+    </style>
+    """, unsafe_allow_html=True)
 
 
 def render_semaforo_tab(match_name: str) -> None:
@@ -106,6 +132,7 @@ def render_semaforo_tab(match_name: str) -> None:
       - Guardar en SQLite al hacer clic
       - Mostrar resumen de calificaciones ya guardadas para este partido
     """
+    _inject_semaforo_css()
     st.markdown("**Semáforo post-partido**")
     st.caption("Calificación individual — hacé clic para evaluar a cada jugador.")
 

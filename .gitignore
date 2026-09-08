@@ -39,6 +39,12 @@ env/
 # ── Streamlit ─────────────────────────────────────────────
 .streamlit/secrets.toml
 
+# app/static/ la genera automáticamente components/video_sync.py en tiempo
+# de ejecución (hardlink del video servido al reproductor sincronizado del
+# dashboard) — no es código fuente, no se commitea. Si te aparece en
+# `git status`, es esperable, no hace falta agregarla.
+app/static/
+
 # ── IDE ───────────────────────────────────────────────────
 .vscode/
 .idea/

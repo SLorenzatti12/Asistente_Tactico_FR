@@ -22,16 +22,26 @@ from components.map_view import render_map, render_metrics_panel
 # Luci desarrolla estas funciones en components/tagging.py
 from components.tagging import render_tagging_panel, render_semaforo_tab
 
+# Estadísticas individuales por jugador (src/analysis/player_stats.py)
+from components.player_stats_view import render_player_stats
+
+# Reproductor de video sincronizado con el mapa (CCv2) — reemplaza a st.video()
+from components.video_sync import render_video_sincronizado
+
+# Identidad visual del sistema (paleta, tipografía, CSS global)
+from theme import aplicar_estilos_globales
+
 ROOT    = Path(__file__).resolve().parent.parent
 OUTPUTS = ROOT / "data" / "outputs"
 
-st.set_page_config(page_title="Analizador Táctico", layout="wide")
+st.set_page_config(page_title="Analizador Táctico", page_icon="⚽", layout="wide")
+aplicar_estilos_globales()
 
 
 # ── Estado inicial de la sesión ─────────────────────────────
 def init_state():
     defaults = {
-        "current_time": 0,       # segundo actual del video (sincroniza mapa y video)
+        "current_time": 0.0,     # segundo actual del video (sincroniza mapa y video)
         "playing": False,
         "selected_match": None,  # nombre del partido/video seleccionado
         "events": [],            # lista de tags: [{"type":..., "time":...}]
@@ -61,7 +71,8 @@ def match_selector() -> dict | None:
         return None
 
     names = [f.stem.replace("_coords_field", "") for f in field_files]
-    selected = st.selectbox("Partido", names)
+    # Label oculto: el contenedor que lo envuelve (en main()) ya dice "Partido".
+    selected = st.selectbox("Partido", names, label_visibility="collapsed")
     idx = names.index(selected)
 
     return {
@@ -72,42 +83,90 @@ def match_selector() -> dict | None:
     }
 
 
+# ── Video sincronizado + slider manual + mapa + métricas ─────
+@st.fragment
+def _panel_sincronizado(df: pd.DataFrame, match: dict, col_video, col_metricas) -> None:
+    """
+    Video + slider manual + mapa 2D + métricas, en un mismo st.fragment:
+    mientras el video reproduce, components/video_sync.py actualiza
+    `current_time` en session_state varias veces por segundo, y SOLO este
+    bloque se vuelve a dibujar — no toda la pestaña, no las otras. Por eso
+    el mapa y las métricas tienen que vivir en el MISMO fragmento que el
+    video: un cambio de session_state hecho por otro fragmento no le llega
+    (cada fragmento solo se re-ejecuta por sus propios triggers).
+
+    El tagueo (Luci) queda deliberadamente afuera de este fragmento — lo
+    sigue escribiendo main() en col_metricas, después de esta llamada.
+    """
+    with col_video:
+        if not match["tracked_video"].exists():
+            st.info("Video anotado no encontrado — mostrando solo el mapa.")
+        else:
+            # None salvo en la corrida exacta en que el video reportó un
+            # tiempo nuevo (ver el docstring de render_video_sincronizado
+            # para el porqué) — por eso alcanza con "si no es None, lo
+            # piso"; cualquier otra corrida deja current_time como está,
+            # que es lo que hace que el slider manual no se pelee con esto.
+            # Tiene que ir ANTES de crear el slider de abajo — Streamlit no
+            # deja tocar session_state[key] después de instanciado el
+            # widget con ese key en la misma corrida.
+            tick = render_video_sincronizado(
+                match["tracked_video"], key=f"video_{match['name']}"
+            )
+            if tick is not None:
+                st.session_state["current_time"] = tick
+
+        duracion = float(df["time_sec"].max()) if not df.empty else 60.0
+        # Clamp: session_state["current_time"] persiste entre partidos, y el
+        # slider tira error si su value queda por encima del max de este.
+        st.session_state["current_time"] = min(st.session_state["current_time"], duracion)
+
+        st.slider(
+            "Tiempo (s)", min_value=0.0, max_value=duracion, step=0.1,
+            key="current_time",
+            help="Control manual — útil para análisis cuadro a cuadro. "
+                 "Mientras el video reproduce, se sincroniza solo con él.",
+        )
+
+        render_map(df, current_time=st.session_state["current_time"])
+
+    with col_metricas:
+        render_metrics_panel(df, current_time=st.session_state["current_time"])
+
+
 # ── App principal ─────────────────────────────────────────
 def main():
     init_state()
 
     st.title("⚽ Analizador Táctico")
-    st.caption("Liga de San Francisco — Análisis post-partido")
+    st.caption("Liga de San Francisco — Análisis táctico post-partido a partir del video")
 
-    match = match_selector()
+    with st.container(border=True):
+        st.markdown("##### 📁 Partido")
+        match = match_selector()
     if match is None:
         return
 
     df = pd.read_parquet(match["field_parquet"])
 
-    tab_live, tab_semaforo = st.tabs(["📊 Análisis", "🚦 Semáforo post-partido"])
+    tab_live, tab_jugadores, tab_semaforo = st.tabs(
+        ["📊 Análisis", "🏃 Jugadores", "🚦 Semáforo post-partido"]
+    )
 
     with tab_live:
         col_video, col_side = st.columns([2, 1])
 
-        with col_video:
-            # ── Reproductor de video (Santi) ───────────
-            if match["tracked_video"].exists():
-                st.video(str(match["tracked_video"]))
-            else:
-                st.info("Video anotado no encontrado — mostrando solo el mapa.")
-
-            # ── Mapa 2D (Nico) ─────────────────────────
-            render_map(df, current_time=st.session_state["current_time"])
+        # ── Video sincronizado + mapa (Nico) + métricas (Nico) ──
+        _panel_sincronizado(df, match, col_video, col_side)
 
         with col_side:
-            # ── Métricas (Nico) ────────────────────────
-            render_metrics_panel(df, current_time=st.session_state["current_time"])
-
             st.divider()
-
             # ── Tagueo one-click (Luci) ────────────────
             render_tagging_panel()
+
+    with tab_jugadores:
+        # ── Estadísticas individuales por jugador ──
+        render_player_stats(df)
 
     with tab_semaforo:
         # ── Semáforo (Luci) ────────────────────────────

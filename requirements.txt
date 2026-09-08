@@ -5,6 +5,7 @@ opencv-python>=4.9.0     # captura y manipulación de video
 # ── Datos ──────────────────────────────────────────────────
 pandas>=2.1.0
 pyarrow>=14.0.0          # formato .parquet para coordenadas
+scikit-learn>=1.4.0      # KMeans — asignación de equipo por color de camiseta
 
 # ── Interfaz y visualización ───────────────────────────────
 streamlit>=1.32.0
