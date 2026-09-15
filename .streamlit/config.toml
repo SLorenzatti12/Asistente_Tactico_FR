@@ -1,0 +1,19 @@
+[server]
+# Límite de subida en MB. El default de Streamlit es 200MB, insuficiente
+# para un video de partido completo. 2000MB da margen para partidos en
+# buena calidad sin abrir la puerta a archivos desmedidos.
+maxUploadSize = 2000
+
+[theme]
+# El primaryColor de Streamlit (rojo/coral por default) se usa para TODO
+# lo "seleccionado/activo": tabs, segmented_control, botones type="primary",
+# sliders, checkboxes. Se cambia a verde para que "esto está elegido" sea
+# un color de UI aparte de azul (Local) y rojo (Visitante) — evita que el
+# usuario confunda el borde de selección con el color de un equipo.
+primaryColor = "#22c55e"
+
+# Con solo primaryColor, Streamlit bloquea la app a un único modo fijo (y
+# sin `base` cae en claro por default) — eso fue lo que la cambió sola de
+# oscuro a claro. Fijamos `base = "dark"` para volver al estado original;
+# el switch propio de main.py encima de esto cubre el modo claro con CSS.
+base = "dark"

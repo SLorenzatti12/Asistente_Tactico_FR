@@ -20,8 +20,10 @@ import pandas as pd
 FIELD_LENGTH = 105  # eje x (arco a arco)
 FIELD_WIDTH = 68    # eje y (lateral a lateral)
 
-FPS = 10
-DURATION_SEC = 20
+FPS = 1              # 1 posición/seg: alcanza para probar el slider y el
+                     # formato mm:ss con partidos largos, sin generar un
+                     # archivo pesado (esto no simula fluidez de tracking).
+DURATION_SEC = 40 * 60  # 40 min, similar a un primer tiempo completo.
 N_FRAMES = FPS * DURATION_SEC
 
 ROOT = Path(__file__).resolve().parent.parent

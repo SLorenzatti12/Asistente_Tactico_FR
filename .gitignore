@@ -38,6 +38,7 @@ env/
 
 # ── Streamlit ─────────────────────────────────────────────
 .streamlit/secrets.toml
+.streamlit/ui_prefs.json
 
 # ── IDE ───────────────────────────────────────────────────
 .vscode/

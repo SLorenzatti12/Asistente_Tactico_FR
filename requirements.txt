@@ -9,6 +9,10 @@ pyarrow>=14.0.0          # formato .parquet para coordenadas
 # ── Interfaz y visualización ───────────────────────────────
 streamlit>=1.32.0
 plotly>=5.20.0           # mapa 2D interactivo
+streamlit-sortables==0.3.1  # drag-and-drop de tipos de evento — sin
+                             # release desde ene/2025 y marcado "Alpha" por
+                             # su autor; se usa a sabiendas del riesgo, ver
+                             # docs/context/decisiones.md
 
 # ── Utilitarios ────────────────────────────────────────────
 tqdm>=4.66.0             # barra de progreso

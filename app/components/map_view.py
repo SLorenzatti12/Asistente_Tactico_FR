@@ -284,19 +284,24 @@ def render_map(df: pd.DataFrame, current_time: float) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
-def _render_team_metrics(label: str, players_df: pd.DataFrame) -> None:
-    st.markdown(f"**{label}**")
-    m = _block_metrics(players_df)
-    if m is None:
-        st.caption("Sin datos suficientes en este instante.")
-        return
-    c1, c2 = st.columns(2)
-    c1.metric("Amplitud", f"{m['amplitud']:.1f} m", help="Ancho del bloque (eje lateral, 68 m).")
-    c2.metric("Profundidad", f"{m['profundidad']:.1f} m", help="Largo del bloque (eje arco-arco, 105 m).")
-    c3, c4 = st.columns(2)
-    c3.metric("Área ocupada", f"{m['area']:.0f} m²", help="Superficie de la envolvente convexa del bloque.")
-    c4.metric("Compacidad", f"{m['dispersion']:.1f} m", help="Distancia media al centroide (menor = más junto).")
-    st.caption(f"{m['n']} jugadores en el bloque")
+def _render_team_metrics(label: str, players_df: pd.DataFrame, color: str = UNKNOWN_COLOR) -> None:
+    """Una tarjeta por equipo, con el nombre en su color y las 4 métricas en grilla 2x2."""
+    with st.container(border=True):
+        st.markdown(
+            f"<span style='color:{color}; font-weight:600; font-size:1.05rem;'>{label}</span>",
+            unsafe_allow_html=True,
+        )
+        m = _block_metrics(players_df)
+        if m is None:
+            st.caption("Sin datos suficientes en este instante.")
+            return
+        c1, c2 = st.columns(2)
+        c1.metric("Amplitud", f"{m['amplitud']:.1f} m", help="Ancho del bloque (eje lateral, 68 m).")
+        c2.metric("Profundidad", f"{m['profundidad']:.1f} m", help="Largo del bloque (eje arco-arco, 105 m).")
+        c3, c4 = st.columns(2)
+        c3.metric("Área ocupada", f"{m['area']:.0f} m²", help="Superficie de la envolvente convexa del bloque.")
+        c4.metric("Compacidad", f"{m['dispersion']:.1f} m", help="Distancia media al centroide (menor = más junto).")
+        st.caption(f"{m['n']} jugadores en el bloque")
 
 
 def render_metrics_panel(df: pd.DataFrame, current_time: float) -> None:
@@ -313,19 +318,14 @@ def render_metrics_panel(df: pd.DataFrame, current_time: float) -> None:
         return
 
     if "team" in players.columns:
-        first = True
         for team_key in ("home", "away"):
             sub = players[players["team"] == team_key]
             if sub.empty:
                 continue
-            if not first:
-                st.divider()
-            _render_team_metrics(TEAM_LABELS.get(team_key, team_key), sub)
-            first = False
+            _render_team_metrics(TEAM_LABELS.get(team_key, team_key), sub, _team_color(team_key))
         # Jugadores sin equipo asignado (si los hubiera)
         unknown = players[~players["team"].isin(["home", "away"])]
         if not unknown.empty:
-            st.divider()
             _render_team_metrics("⚪ Sin equipo", unknown)
     else:
         # Fallback: sin columna team, se mide el conjunto completo.
