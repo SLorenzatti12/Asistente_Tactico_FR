@@ -33,7 +33,7 @@ demostración académica.
 
 - **Videos de partidos** (entrenamientos y partidos de liga)
 - **Permiso para filmar** en el estadio y en el campo de entrenamiento
-- **Cámaras Vevo** disponibles para usar
+- **Cámaras Veo** disponibles para usar
 
 ### Por qué esto resuelve el mayor bloqueante del proyecto
 

@@ -20,6 +20,8 @@ from streamlit_sortables import sort_items
 # se vea igual en todos lados (ver components/map_view.py).
 from components.map_view import TEAM_COLORS, TEAM_LABELS
 
+from theme import STATUS_COLORS
+
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "db" / "analizador.sqlite"
 ROSTER_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "roster.json"
 
@@ -833,6 +835,28 @@ def render_tagging_panel() -> None:
         _render_events_cards(events_df)
 
 
+def _inject_semaforo_css() -> None:
+    """
+    Colorea los tres botones del semáforo (🔴🟡🟢) con los colores de estado
+    del tema. Cada botón tiene su propio `key` por jugador (low_3, low_7, ...),
+    así que el selector usa "contiene" ([class*=...]) para pegarle a todos los
+    de un mismo rating con una sola regla, en vez de generar una por jugador.
+
+    Nota: `.st-key-<key>` es la clase que Streamlit genera a partir del `key`
+    del widget — ver "Never use CSS for theming" en la guía de temas: acá se
+    usa CSS a propósito porque st.button no tiene un parámetro de color propio
+    (solo type="primary"/"secondary"), y los 3 colores del semáforo no
+    coinciden con la paleta de tipos de botón.
+    """
+    st.markdown(f"""
+    <style>
+      div[class*="st-key-low_"] button {{ border-color: {STATUS_COLORS["critico"]}; }}
+      div[class*="st-key-mid_"] button {{ border-color: {STATUS_COLORS["alerta"]}; }}
+      div[class*="st-key-high_"] button {{ border-color: {STATUS_COLORS["ok"]}; }}
+    </style>
+    """, unsafe_allow_html=True)
+
+
 def render_semaforo_tab(match_name: str) -> None:
     """
     Formulario de calificación individual post-partido (🔴🟡🟢 por jugador).
@@ -840,6 +864,7 @@ def render_semaforo_tab(match_name: str) -> None:
     TODO Persona C:
       - Mostrar resumen de calificaciones ya guardadas para este partido
     """
+    _inject_semaforo_css()
     st.markdown("**Semáforo post-partido**")
     st.caption("Calificación individual — hacé clic para evaluar a cada jugador.")
 

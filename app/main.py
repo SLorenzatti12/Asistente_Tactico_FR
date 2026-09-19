@@ -25,11 +25,21 @@ from components.map_view import render_map, render_metrics_panel
 # Luci desarrolla estas funciones en components/tagging.py
 from components.tagging import init_db, render_tagging_panel, render_semaforo_tab, format_time
 
+# Estadísticas individuales por jugador (src/analysis/player_stats.py)
+from components.player_stats_view import render_player_stats
+
+# Reproductor de video sincronizado con el mapa (CCv2) — reemplaza a st.video()
+from components.video_sync import render_video_sincronizado
+
+# Identidad visual del sistema (paleta, tipografía, CSS global)
+from theme import aplicar_estilos_globales
+
 ROOT    = Path(__file__).resolve().parent.parent
 OUTPUTS = ROOT / "data" / "outputs"
 THEME_PREF_PATH = ROOT / ".streamlit" / "ui_prefs.json"
 
-st.set_page_config(page_title="Analizador Táctico", layout="wide")
+st.set_page_config(page_title="Analizador Táctico", page_icon="⚽", layout="wide")
+aplicar_estilos_globales()
 
 
 # ── Preferencia de tema (persiste en disco, no es "por usuario") ────
@@ -83,6 +93,15 @@ body, .stApp,
    el texto blanco de los botones primarios (verdes) de los modales. */
 p, label, h1, h2, h3, h4, h5, h6 {
     color: #1f2328 !important;
+}
+/* theme.py (Santi) pinta las tarjetas de métrica con colores oscuros fijos
+   (BG_SECONDARY / BORDER_COLOR), pensadas para el modo oscuro único que él
+   había planteado. Como acá se conserva el switch claro/oscuro, en claro hay
+   que revertirlas o quedan tarjetas negras sobre fondo blanco. Su CSS no usa
+   !important, así que alcanza con esto. */
+[data-testid="stMetric"] {
+    background-color: #f6f8fa !important;
+    border-color: #d0d7de !important;
 }
 </style>
 """
@@ -364,7 +383,8 @@ def match_selector() -> dict | None:
         return None
 
     names = [f.stem.replace("_coords_field", "") for f in field_files]
-    selected = st.selectbox("Partido", names)
+    # Label oculto: el contenedor que lo envuelve (en main()) ya dice "Partido".
+    selected = st.selectbox("Partido", names, label_visibility="collapsed")
     idx = names.index(selected)
 
     return {
@@ -375,6 +395,102 @@ def match_selector() -> dict | None:
     }
 
 
+# ── Video sincronizado + slider manual + mapa + métricas ─────
+@st.fragment
+def _panel_sincronizado(df: pd.DataFrame, match: dict, col_video, col_metricas) -> None:
+    """
+    Video + slider manual + mapa 2D + métricas, en un mismo st.fragment:
+    mientras el video reproduce, components/video_sync.py actualiza
+    `current_time` en session_state varias veces por segundo, y SOLO este
+    bloque se vuelve a dibujar — no toda la pestaña, no las otras. Por eso
+    el mapa y las métricas tienen que vivir en el MISMO fragmento que el
+    video: un cambio de session_state hecho por otro fragmento no le llega
+    (cada fragmento solo se re-ejecuta por sus propios triggers).
+
+    El tagueo (Luci) queda deliberadamente afuera de este fragmento — lo
+    sigue escribiendo main() en col_metricas, después de esta llamada.
+    """
+    with col_video:
+        if not match["tracked_video"].exists():
+            st.info("Video anotado no encontrado — mostrando solo el mapa.")
+        else:
+            # None salvo en la corrida exacta en que el video reportó un
+            # tiempo nuevo (ver el docstring de render_video_sincronizado
+            # para el porqué) — por eso alcanza con "si no es None, lo
+            # piso"; cualquier otra corrida deja current_time como está,
+            # que es lo que hace que el slider manual no se pelee con esto.
+            # Tiene que ir ANTES de crear el slider de abajo — Streamlit no
+            # deja tocar session_state[key] después de instanciado el
+            # widget con ese key en la misma corrida.
+            tick = render_video_sincronizado(
+                match["tracked_video"], key=f"video_{match['name']}"
+            )
+            if tick is not None:
+                st.session_state["current_time"] = tick
+
+        duracion = float(df["time_sec"].max()) if not df.empty else 60.0
+        # Clamp: session_state["current_time"] persiste entre partidos, y el
+        # slider tira error si su value queda por encima del max de este.
+        st.session_state["current_time"] = min(st.session_state["current_time"], duracion)
+
+        # st.slider no tiene un `format` que pueda producir mm:ss para NINGUNO
+        # de los tres números que dibuja (valor actual, mínimo, máximo): solo
+        # acepta printf-style. Así que los números crudos nativos se ocultan
+        # con CSS y el mm:ss se pone aparte. Los data-testid salieron del
+        # bundle JS instalado en el venv (streamlit/static/.../Slider.*.js,
+        # 1.63.0) y se verificó en Chrome que efectivamente los tapan.
+        #
+        # step=0.1 se mantiene (análisis cuadro a cuadro) — como la burbuja de
+        # valor queda oculta, que el paso sea decimal ya no se ve feo.
+        st.markdown(
+            """
+            <style>
+            .st-key-time_slider [data-testid="stSliderTickBar"],
+            .st-key-time_slider [data-testid="stSliderThumbValue"] {
+                display: none !important;
+            }
+            /* El label se restila en vez de colapsarlo con
+               label_visibility="collapsed": el ícono de ayuda (help=) cuelga
+               del label nativo, así que colapsarlo se lo lleva puesto. */
+            .st-key-time_slider label p {
+                font-size: 1.05rem !important;
+                font-weight: 700 !important;
+                letter-spacing: 0.01em !important;
+            }
+            /* Los extremos van en UNA fila flex, no en dos st.columns: con
+               columnas, el texto de la derecha se alinea a la izquierda de SU
+               columna y queda corrido respecto del extremo real de la barra. */
+            .st-key-time_slider .slider-bounds {
+                display: flex;
+                justify-content: space-between;
+                font-size: 0.78rem;
+                opacity: 0.65;
+                margin-top: -6px;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.container(key="time_slider"):
+            st.slider(
+                f"Minuto actual — {format_time(st.session_state['current_time'])}",
+                min_value=0.0, max_value=duracion, step=0.1,
+                key="current_time",
+                help="Control manual — útil para análisis cuadro a cuadro. "
+                     "Mientras el video reproduce, se sincroniza solo con él.",
+            )
+            st.markdown(
+                f'<div class="slider-bounds"><span>{format_time(0.0)}</span>'
+                f"<span>{format_time(duracion)}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        render_map(df, current_time=st.session_state["current_time"])
+
+    with col_metricas:
+        render_metrics_panel(df, current_time=st.session_state["current_time"])
+
+
 # ── App principal ─────────────────────────────────────────
 def main():
     init_state()
@@ -383,8 +499,8 @@ def main():
     # Si se clickeó un evento en el timeline de tagging.py, el salto de
     # tiempo queda pendiente en esta clave intermedia — Streamlit no deja
     # reasignar session_state["current_time"] una vez que el slider (más
-    # abajo) ya se instanció en la misma corrida, así que se aplica acá,
-    # antes de crear el slider.
+    # abajo, dentro de _panel_sincronizado) ya se instanció en la misma
+    # corrida, así que se aplica acá, antes de crear el slider.
     if st.session_state.get("_pending_seek_time") is not None:
         st.session_state["current_time"] = st.session_state.pop("_pending_seek_time")
 
@@ -392,7 +508,9 @@ def main():
 
     _inject_theme_css(st.session_state["theme_mode"])
 
-    match = match_selector()
+    with st.container(border=True):
+        st.markdown("##### 📁 Partido")
+        match = match_selector()
     if match is None:
         return
 
@@ -400,109 +518,24 @@ def main():
 
     df = pd.read_parquet(match["field_parquet"])
 
-    tab_live, tab_semaforo = st.tabs(["📊 Análisis", "🚦 Semáforo post-partido"])
+    tab_live, tab_jugadores, tab_semaforo = st.tabs(
+        ["📊 Análisis", "🏃 Jugadores", "🚦 Semáforo post-partido"]
+    )
 
     with tab_live:
         col_video, col_side = st.columns([2, 1])
 
-        with col_video:
-            # ── Reproductor de video (Santi) ───────────
-            if match["tracked_video"].exists():
-                st.video(str(match["tracked_video"]))
-            else:
-                st.info("Video anotado no encontrado — mostrando solo el mapa.")
-
-            # ── Segundo actual (sincronización manual) ─
-            # Streamlit no expone en qué momento va el reproductor de video,
-            # así que este slider es la forma simple de decirle a la app
-            # "estoy parado acá": alimenta tanto el mapa/métricas como el
-            # tiempo que se guarda al tocar un botón de tagueo.
-            has_time = "time_sec" in df.columns and not df.empty
-            max_time = float(df["time_sec"].max()) if has_time else 3600.0
-            # st.slider no tiene un `format` que pueda producir mm:ss para
-            # NINGUNO de los tres números que dibuja (valor actual, mínimo,
-            # máximo) — confirmado en su docstring, solo acepta printf-style
-            # o formatos predefinidos. Por eso el mm:ss va en el label
-            # (format_time(), la misma de "Editar eventos") y se intenta
-            # ocultar los números crudos nativos con CSS.
-            #
-            # A diferencia de la flechita del popover (que fue una conjetura
-            # a ciegas), estos data-testid SÍ están confirmados: se
-            # extrajeron directamente del bundle JS instalado en este venv
-            # (venv/.../streamlit/static/static/js/Slider.*.js — Streamlit
-            # 1.63.0), no adivinados. `stSliderTickBar` es el único elemento
-            # que dibuja min Y max juntos (no hay uno separado por lado) y
-            # `stSliderThumbValue` es la burbuja de valor actual en verde
-            # (el "0.00 duplicado" reportado). Lo que SÍ sigue sin poder
-            # verificarse sin navegador real es que estas clases de React
-            # no cambien de nombre entre builds — por eso el mm:ss también
-            # se muestra aparte más abajo como respaldo garantizado.
-            st.markdown(
-                """
-                <style>
-                .st-key-time_slider [data-testid="stSliderTickBar"],
-                .st-key-time_slider [data-testid="stSliderThumbValue"] {
-                    display: none !important;
-                }
-                /* El label se restila en vez de colapsarlo con
-                   label_visibility="collapsed": el ícono de ayuda (help=)
-                   cuelga del label nativo, así que colapsarlo se lo lleva
-                   puesto. */
-                .st-key-time_slider label p {
-                    font-size: 1.05rem !important;
-                    font-weight: 700 !important;
-                    letter-spacing: 0.01em !important;
-                }
-                /* Los extremos van en UNA fila flex, no en dos st.columns:
-                   con columnas, el texto de la derecha se alinea a la
-                   izquierda de SU columna y queda corrido respecto del
-                   extremo real de la barra. */
-                .st-key-time_slider .slider-bounds {
-                    display: flex;
-                    justify-content: space-between;
-                    font-size: 0.78rem;
-                    opacity: 0.65;
-                    margin-top: -6px;
-                }
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
-            current_label = format_time(st.session_state.get("current_time", 0.0))
-            with st.container(key="time_slider"):
-                st.slider(
-                    f"Minuto actual — {current_label}",
-                    min_value=0.0,
-                    max_value=max_time,
-                    step=1.0,
-                    format="%.0f",
-                    key="current_time",
-                    help="Ajustá esto a mano mientras mirás el video, para sincronizar el mapa y el tagueo con lo que estás viendo.",
-                )
-                st.markdown(
-                    f'<div class="slider-bounds"><span>{format_time(0.0)}</span>'
-                    f"<span>{format_time(max_time)}</span></div>",
-                    unsafe_allow_html=True,
-                )
-
-            # ── Mapa 2D (Nico) ─────────────────────────
-            render_map(df, current_time=st.session_state["current_time"])
+        # ── Video sincronizado + mapa (Nico) + métricas (Nico) ──
+        _panel_sincronizado(df, match, col_video, col_side)
 
         with col_side:
-            # Tabs en vez de apilar Métricas + Tagueo: así la columna
-            # derecha no crece hacia abajo alejándose del video, y cambiar
-            # de sección es un solo click (verificado: anidar tabs dentro
-            # de una columna dentro de otro tabs no tiene problema en esta
-            # versión de Streamlit).
-            sub_metrics, sub_tagging = st.tabs(["📈 Métricas", "🏷️ Tagueo"])
+            st.divider()
+            # ── Tagueo one-click (Luci) ────────────────
+            render_tagging_panel()
 
-            with sub_metrics:
-                # ── Métricas (Nico) ────────────────────
-                render_metrics_panel(df, current_time=st.session_state["current_time"])
-
-            with sub_tagging:
-                # ── Tagueo one-click (Luci) ─────────────
-                render_tagging_panel()
+    with tab_jugadores:
+        # ── Estadísticas individuales por jugador ──
+        render_player_stats(df)
 
     with tab_semaforo:
         # ── Semáforo (Luci) ────────────────────────────

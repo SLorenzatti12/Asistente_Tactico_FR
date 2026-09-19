@@ -1,19 +1,76 @@
+# Analizador Táctico — tema nativo de Streamlit
+# ================================================
+# Estos valores deben coincidir con BG_COLOR / BG_SECONDARY / TEXT_COLOR de
+# app/theme.py — es la misma paleta, duplicada a mano porque Streamlit no
+# permite leer este archivo desde Python. Si se cambia acá, cambiar también
+# en theme.py (y viceversa).
+#
+# EXCEPCIÓN DELIBERADA (ver más abajo): primaryColor NO coincide con
+# ACCENT_COLOR de theme.py. Está explicado en su lugar; no es un descuido.
+#
+# base = "dark" es el modo de partida. El switch claro/oscuro propio de
+# main.py se monta ENCIMA con CSS (no usa el toggle nativo de Streamlit).
+
 [server]
+# Sirve archivos desde app/static/ bajo la URL /app/static/<...> (con soporte
+# de range requests, necesario para poder arrastrar la barra del video). Lo
+# usa components/video_sync.py para exponerle el video al reproductor
+# sincronizado — ver la nota en ese módulo y en .gitignore sobre app/static/.
+enableStaticServing = true
+
 # Límite de subida en MB. El default de Streamlit es 200MB, insuficiente
-# para un video de partido completo. 2000MB da margen para partidos en
-# buena calidad sin abrir la puerta a archivos desmedidos.
+# para un video de partido completo.
 maxUploadSize = 2000
 
 [theme]
-# El primaryColor de Streamlit (rojo/coral por default) se usa para TODO
-# lo "seleccionado/activo": tabs, segmented_control, botones type="primary",
-# sliders, checkboxes. Se cambia a verde para que "esto está elegido" sea
-# un color de UI aparte de azul (Local) y rojo (Visitante) — evita que el
-# usuario confunda el borde de selección con el color de un equipo.
+base = "dark"
+
+# Verde, NO el ámbar de ACCENT_COLOR (theme.py). Son dos roles distintos:
+#   - primaryColor (acá) pinta lo "seleccionado/activo" de Streamlit: tabs,
+#     segmented_control, sliders, checkboxes, botones type="primary". Va en
+#     verde para que "esto está elegido" no se confunda con azul (Local) ni
+#     rojo (Visitante) en el mapa y el tagueo.
+#   - ACCENT_COLOR (theme.py) pinta los gráficos analíticos, donde el ámbar
+#     contrasta contra el verde césped de la cancha (FIELD_BG).
+# Si algún día se unifican, hay que revisar los dos efectos, no solo uno.
 primaryColor = "#22c55e"
 
-# Con solo primaryColor, Streamlit bloquea la app a un único modo fijo (y
-# sin `base` cae en claro por default) — eso fue lo que la cambió sola de
-# oscuro a claro. Fijamos `base = "dark"` para volver al estado original;
-# el switch propio de main.py encima de esto cubre el modo claro con CSS.
-base = "dark"
+backgroundColor = "#0e1117"           # fondo principal
+secondaryBackgroundColor = "#181c25"  # widgets, tarjetas, sidebar
+textColor = "#e6e9ef"                 # blanco cálido, no puro
+linkColor = "#d97706"
+borderColor = "#2a2f3a"
+
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
+baseFontSize = 15
+linkUnderline = false
+
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "8px"
+buttonRadius = "8px"
+
+# Colores de estado — mismos valores que STATUS_COLORS / ZONE_COLORS en theme.py
+redColor = "#ef4444"
+orangeColor = "#f59e0b"
+yellowColor = "#eab308"
+greenColor = "#22c55e"
+blueColor = "#3b82f6"
+violetColor = "#8b5cf6"
+grayColor = "#6b7280"
+
+# Paleta categórica para gráficos nativos (st.bar_chart, etc.) — los charts
+# Plotly de la app usan sus propios colores explícitos (theme.ZONE_COLORS,
+# TEAM_COLORS), esto es solo para consistencia si se agrega un chart nativo.
+chartCategoricalColors = ["#3b82f6", "#22c55e", "#ef4444", "#f59e0b", "#8b5cf6", "#eab308", "#6b7280"]
+
+dataframeBorderColor = "#2a2f3a"
+dataframeHeaderBackgroundColor = "#181c25"
+
+[theme.sidebar]
+backgroundColor = "#12151c"
+secondaryBackgroundColor = "#181c25"
+textColor = "#e6e9ef"
+borderColor = "#2a2f3a"
+primaryColor = "#22c55e"
