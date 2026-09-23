@@ -57,6 +57,20 @@ conexión — no es un servidor que se instale en la laptop del analista, es
 una API a la que se llama después. Detalle completo en
 `8-base-de-datos-hibrida.md`.
 
+**Row Level Security (RLS): desactivada por ahora.** Al correr
+`db/schema_cloud.sql` por primera vez (23/09/2026), Supabase avisa que las
+tablas quedan sin RLS y ofrece activarla. Se eligió **no activarla**
+todavía: el código (`src/db/sync.py`) usa una única key pública
+("publishable"/anon) para todas las operaciones, y activar RLS sin
+políticas escritas hace que Postgres bloquee todo por default —
+rompería el sync entero sin ganar seguridad real (no hay con qué
+distinguir usuarios todavía, no hay Auth). **Consecuencia:** cualquiera
+con esa key pública puede leer/escribir las tablas directo contra la API
+de Supabase, sin pasar por la app. Aceptable para esta etapa (proyecto de
+facultad, un solo equipo, sin datos sensibles de terceros); revisar
+cuando se agregue Auth — ver el pendiente correspondiente en
+`8-base-de-datos-hibrida.md`.
+
 ## Infraestructura de repo
 
 - El repo estuvo (y puede volver a estar) sincronizado con iCloud Drive, lo que corrompió archivos (0 bytes) durante merges/clonados. **Evitar arrastrar archivos con Finder**; usar terminal o el editor directamente. Recomendado sacar el repo local de iCloud Drive.

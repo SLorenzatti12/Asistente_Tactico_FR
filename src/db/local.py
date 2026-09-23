@@ -29,12 +29,25 @@ def _connect() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH)
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    """`events`/`semaforo` los crea tagging.init_db() la primera vez que se
+    corre la app — hasta entonces (ej. si solo se cargó plantel/video, sin
+    tocar el tab de tagueo todavía) no existen, y hay que tratarlo como
+    "sin datos" en vez de romper con `sqlite3.OperationalError`."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    return row is not None
+
+
 def ensure_sync_columns() -> None:
     """Migración aditiva: agrega `synced_at` si no existe. Seguro de correr
     muchas veces (chequea antes de alterar)."""
     conn = _connect()
     try:
         for table in ("events", "semaforo"):
+            if not _table_exists(conn, table):
+                continue
             cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
             if "synced_at" not in cols:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN synced_at TEXT")
@@ -52,11 +65,11 @@ def list_match_names() -> list[str]:
 
     conn = _connect()
     try:
-        rows = conn.execute(
-            "SELECT DISTINCT match_name FROM events "
-            "UNION SELECT DISTINCT match_name FROM semaforo "
-            "UNION SELECT DISTINCT match_name FROM match_videos"
-        ).fetchall()
+        tablas = [t for t in ("events", "semaforo", "match_videos") if _table_exists(conn, t)]
+        if not tablas:
+            return []
+        query = " UNION ".join(f"SELECT DISTINCT match_name FROM {t}" for t in tablas)
+        rows = conn.execute(query).fetchall()
         return sorted({r[0] for r in rows if r[0]})
     finally:
         conn.close()
@@ -65,6 +78,8 @@ def list_match_names() -> list[str]:
 def get_unsynced_events(match_name: str) -> list[dict]:
     conn = _connect()
     try:
+        if not _table_exists(conn, "events"):
+            return []
         conn.row_factory = sqlite3.Row
         cols = {row[1] for row in conn.execute("PRAGMA table_info(events)").fetchall()}
         team_col = "team" if "team" in cols else "NULL as team"
@@ -81,6 +96,8 @@ def get_unsynced_events(match_name: str) -> list[dict]:
 def get_unsynced_ratings(match_name: str) -> list[dict]:
     conn = _connect()
     try:
+        if not _table_exists(conn, "semaforo"):
+            return []
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT id, match_name, player_number, rating, created_at "

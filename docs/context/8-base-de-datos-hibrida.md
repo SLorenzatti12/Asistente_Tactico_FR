@@ -2,6 +2,16 @@
 
 Nico
 
+## Estado
+
+**Vinculado y verificado end-to-end (23/09/2026).** Hay un proyecto real
+de Supabase creado, con `db/schema_cloud.sql` corrido (RLS desactivada a
+propósito — ver `decisiones.md`) y el bucket privado `match-videos`
+creado. Se probó `python scripts/sync_to_cloud.py --all` contra ese
+proyecto: un equipo y su plantel subieron correctamente a las tablas
+`teams`/`players`. Las credenciales viven en `.env` (local, gitignored,
+nunca en el repo).
+
 ## Por qué "híbrida" y no una migración completa a la nube
 
 El stack definido en `7-stack-tecnologico.md` eligió SQLite explícitamente
@@ -88,7 +98,10 @@ scripts/sync_to_cloud.py     # CLI del punto anterior
    accesible sin permiso — ver la sección de privacidad en
    `docs/context/proyecto-analizador-tactico.md`). Solo hace falta
    crearlo una vez por proyecto de Supabase.
-4. Dashboard → Settings → API → copiar `Project URL` y la key `anon public`.
+4. Dashboard → Settings → API → copiar `Project URL` y la key pública
+   (según la versión del dashboard aparece como `anon public` o como
+   `publishable` — **nunca** la `service_role`/`secret`, esa tiene acceso
+   total sin restricciones).
 5. `cp .env.example .env` y completar esos dos valores.
 6. `pip install -r requirements.txt` (agrega `supabase` y `python-dotenv`).
 7. Desde la app: crear al menos un equipo y asignarlo a un partido (panel
@@ -113,3 +126,7 @@ scripts/sync_to_cloud.py     # CLI del punto anterior
   referencien ese id en vez de un número de camiseta suelto).
 - Definir si Supabase Auth reemplaza la tabla `users` propia, si en algún
   momento se necesita login real en una vista compartida del equipo.
+- Activar Row Level Security con políticas reales — hoy está desactivada
+  a propósito porque no hay auth ni políticas escritas todavía (ver
+  `decisiones.md`). Mientras tanto, cualquiera con la key pública del
+  proyecto puede leer/escribir estas tablas directo, sin pasar por la app.
