@@ -37,6 +37,26 @@ Resumen de decisiones con motivo. Detalle completo en `docs/bitacora_2026-08-17.
 
 **Si se rompe:** la alternativa de respaldo (sin dependencias) es reemplazar el drag-and-drop por botones ▲▼ de subir/bajar por fila.
 
+## Base de datos híbrida: se agrega Supabase sin abandonar SQLite
+
+**Contexto:** `7-stack-tecnologico.md` justificó SQLite descartando motores
+cliente-servidor (Postgres/MySQL) por la premisa de procesamiento 100%
+offline en el estadio. Esa decisión se mantiene sin cambios para todo lo
+que ocurre durante el partido.
+
+**Por qué se agrega igual:** SQLite es un archivo en una sola laptop — no
+resuelve que un coach vea el semáforo desde su casa, ni un historial de
+partidos consolidado del equipo, ni gestión de usuarios/roles. Nada de eso
+es necesario en cancha, pero sí después.
+
+**Decisión:** arquitectura híbrida. SQLite sigue siendo la única base
+durante el procesamiento/tagueo offline, sin ningún cambio de flujo.
+Supabase (Postgres gestionado) se agrega como segunda capa, alimentada por
+un sync manual y unidireccional (local → nube) que se corre solo cuando hay
+conexión — no es un servidor que se instale en la laptop del analista, es
+una API a la que se llama después. Detalle completo en
+`8-base-de-datos-hibrida.md`.
+
 ## Infraestructura de repo
 
 - El repo estuvo (y puede volver a estar) sincronizado con iCloud Drive, lo que corrompió archivos (0 bytes) durante merges/clonados. **Evitar arrastrar archivos con Finder**; usar terminal o el editor directamente. Recomendado sacar el repo local de iCloud Drive.

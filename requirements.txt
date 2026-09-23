@@ -19,3 +19,7 @@ streamlit-sortables==0.3.1  # drag-and-drop de tipos de evento — sin
 tqdm>=4.66.0             # barra de progreso
 yt-dlp>=2024.1.0         # descarga de videos de YouTube
 pyyaml>=6.0               # lectura de data.yaml (solo si se entrena modelo custom)
+
+# ── Base de datos híbrida (Nico) ─────────────────────────────
+supabase>=2.4.0          # cliente Postgres/Supabase — mitad "nube" del híbrido
+python-dotenv>=1.0.0     # carga de .env para scripts standalone (fuera de Streamlit)
