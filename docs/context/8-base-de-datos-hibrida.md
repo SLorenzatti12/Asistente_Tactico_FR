@@ -89,6 +89,40 @@ scripts/sync_to_cloud.py     # CLI del punto anterior
 .env.example                 # template de credenciales (nunca commitear .env real)
 ```
 
+## Diagrama rápido de `src/db/`
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ src/db/  — capa de base de datos híbrida                     │
+│                                                               │
+│  supabase_client.py  → único punto de conexión (.env/secrets)│
+│                                                               │
+│  team_repo.py     → equipos/categorías + match_team          │
+│  roster_repo.py   → plantel por equipo (alta/DELETE físico)  │
+│  video_repo.py    → ruta local del video + flag "subido"     │
+│  local.py         → solo-lectura de events/semaforo          │
+│         │                                                     │
+│         └──► sync.py → orquesta el sync completo:            │
+│               - plantel: mirror por equipo (upsert + borra)  │
+│               - video: sube a bucket privado Storage         │
+│               - events/semaforo: upsert vía local.py          │
+└──────────────────────────┬────────────────────────────────────┘
+                            │ usa
+┌───────────────────────────▼──────────────────────────────────┐
+│ Puntos de entrada a la capa                                   │
+│  scripts/sync_to_cloud.py       → CLI, dispara sync.py         │
+│  db/schema_cloud.sql            → DDL espejo en Supabase        │
+│  app/components/team_selector.py  → UI: elegir/crear equipo    │
+│  app/components/roster_view.py    → UI: alta/baja plantel      │
+│  app/components/video_registry.py → UI: registrar ruta video   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Regla de dependencia: todo dentro de `src/db/` solo habla con SQLite
+local; `sync.py` es el único que además habla con Supabase, y solo cuando
+se corre `sync_to_cloud.py` a mano (nunca desde un botón de Streamlit ni
+bloqueando el flujo en cancha).
+
 ## Cómo levantarlo (una vez, por integrante que lo use)
 
 1. Crear un proyecto gratis en [supabase.com](https://supabase.com).
