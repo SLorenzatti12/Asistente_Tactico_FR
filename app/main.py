@@ -31,6 +31,9 @@ from components.player_stats_view import render_player_stats
 # Reproductor de video sincronizado con el mapa (CCv2) — reemplaza a st.video()
 from components.video_sync import render_video_sincronizado
 
+# Patrones tácticos detectados (src/analysis/tactical_patterns.py)
+from components.tactical_patterns_view import render_tactical_patterns_tab
+
 # Identidad visual del sistema (paleta, tipografía, CSS global)
 from theme import aplicar_estilos_globales
 
@@ -315,7 +318,7 @@ _HEADER_CSS = f"""
     width: 92px;
     height: 3px;
     border-radius: 2px;
-    background: linear-gradient(90deg, #22c55e, rgba(34,197,94,0));
+    background: linear-gradient(90deg, #c3ff00, rgba(195,255,0,0));
     margin-bottom: 7px;
 }}
 .st-key-app_header .scoreboard-sub {{
@@ -518,8 +521,8 @@ def main():
 
     df = pd.read_parquet(match["field_parquet"])
 
-    tab_live, tab_jugadores, tab_semaforo = st.tabs(
-        ["📊 Análisis", "🏃 Jugadores", "🚦 Semáforo post-partido"]
+    tab_live, tab_jugadores, tab_patrones, tab_semaforo = st.tabs(
+        ["📊 Análisis", "🏃 Jugadores", "⚠️ Patrones tácticos", "🚦 Semáforo post-partido"]
     )
 
     with tab_live:
@@ -536,6 +539,10 @@ def main():
     with tab_jugadores:
         # ── Estadísticas individuales por jugador ──
         render_player_stats(df)
+
+    with tab_patrones:
+        # ── Patrones tácticos detectados ──
+        render_tactical_patterns_tab(df)
 
     with tab_semaforo:
         # ── Semáforo (Luci) ────────────────────────────
