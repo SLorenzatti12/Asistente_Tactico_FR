@@ -76,6 +76,12 @@ MIN_PIXELES_TORSO = 15  # mínimo de píxeles válidos en el recorte para confia
 N_MUESTRAS_DEFAULT = 30       # frames a muestrear a lo largo del video
 MIN_MUESTRAS_TRACK = 2        # mínimo de muestras válidas por track para confiar en el voto
 
+# Diferencia mínima de luminancia (0-255) entre los dos colores de equipo
+# para que el orden "home = más clara" sea confiable (ver
+# _asignar_por_clustering). Por debajo de esto se avisa: con dos camisetas
+# igual de claras/oscuras, el ruido de muestreo puede invertir el orden.
+MIN_DIF_LUMINANCIA = 20
+
 
 # ── Color de torso ───────────────────────────────────────────
 def extraer_color_torso(frame: np.ndarray, bbox: tuple[float, float, float, float]) -> tuple[int, int, int] | None:
@@ -201,16 +207,31 @@ def _asignar_por_clustering(muestras: pd.DataFrame,
     exacto entre los dos clusters, quedan sin asignar (None) — mejor no
     asignar que forzar una asignación dudosa.
 
+    Etiquetas estables: KMeans numera los clusters en un orden que depende
+    de las muestras (cambiando la calibración o cuántos frames se muestrean,
+    el mismo equipo pasaba de "home" a "away"). Por eso la etiqueta no sale
+    del número de cluster sino de un criterio fijo: **"home" es el equipo de
+    camiseta más clara** (mayor luminancia). Es arbitrario — no tiene por
+    qué coincidir con el local real — pero es el mismo en todas las corridas
+    sobre el mismo video. Si las dos camisetas tienen luminancia parecida
+    (< MIN_DIF_LUMINANCIA), el orden queda marcado como no confiable.
+
     Returns:
-        (equipo_por_track, centros_cluster) — el dict mapea track_id -> "home"/
-        "away"; centros_cluster es un array 2x3 con el RGB de cada cluster
-        (para poder mostrarlo y verificar a ojo que separó bien).
+        (equipo_por_track, centros_cluster, orden_confiable) — el dict mapea
+        track_id -> "home"/"away"; centros_cluster es un array 2x3 con el RGB
+        de cada equipo, en orden [home, away] (para verificar a ojo que separó
+        bien); orden_confiable es False si las luminancias están muy cerca.
     """
     if len(muestras) < 2:
-        return {}, np.empty((0, 3))
+        return {}, np.empty((0, 3)), True
 
     colores = muestras[["r", "g", "b"]].to_numpy(dtype=float)
     kmeans = KMeans(n_clusters=2, n_init=10, random_state=42).fit(colores)
+    centros = kmeans.cluster_centers_
+    luminancia = centros @ np.array([0.299, 0.587, 0.114])     # luma (Rec. 601)
+    cluster_home = int(np.argmax(luminancia))
+    orden_confiable = bool(abs(luminancia[0] - luminancia[1]) >= MIN_DIF_LUMINANCIA)
+    etiqueta = {cluster_home: "home", 1 - cluster_home: "away"}
     muestras = muestras.assign(cluster=kmeans.labels_)
 
     equipo_por_track: dict[int, str] = {}
@@ -221,9 +242,9 @@ def _asignar_por_clustering(muestras: pd.DataFrame,
         if len(conteo) > 1 and conteo.iloc[0] == conteo.iloc[1]:
             continue  # empate 50/50 entre los dos clusters — no hay mayoría clara
         cluster_ganador = int(conteo.idxmax())
-        equipo_por_track[int(track_id)] = "home" if cluster_ganador == 0 else "away"
+        equipo_por_track[int(track_id)] = etiqueta[cluster_ganador]
 
-    return equipo_por_track, kmeans.cluster_centers_
+    return equipo_por_track, centros[[cluster_home, 1 - cluster_home]], orden_confiable
 
 
 def _asignar_arqueros(df: pd.DataFrame, equipo_por_track: dict[int, str]) -> dict[int, str]:
@@ -337,7 +358,7 @@ def asignar_equipos(video_path, df: pd.DataFrame,
     finally:
         cap.release()
 
-    equipo_por_track, centros_cluster = _asignar_por_clustering(muestras, min_muestras_track)
+    equipo_por_track, centros_cluster, orden_confiable = _asignar_por_clustering(muestras, min_muestras_track)
     equipo_por_track = _asignar_arqueros(resultado, equipo_por_track)
 
     # OJO: ByteTrack no garantiza que un track_id sea siempre la misma clase
@@ -363,6 +384,7 @@ def asignar_equipos(video_path, df: pd.DataFrame,
         "n_sin_asignar": tracks_de_persona - (n_home + n_away),
         "n_muestras_validas": len(muestras),
         "colores_cluster_rgb": [tuple(int(round(c)) for c in centro) for centro in centros_cluster],
+        "orden_etiquetas_confiable": orden_confiable,
     }
     return resultado
 
@@ -413,8 +435,11 @@ Ejemplo:
 
     colores = info.get("colores_cluster_rgb", [])
     if colores:
-        print("   Colores representativos de cada cluster (RGB):")
+        print("   Color representativo de cada equipo (RGB) — home = camiseta más clara:")
         for i, c in enumerate(colores):
-            print(f"     cluster {i}: rgb{c}")
+            print(f"     {('home', 'away')[i]}: rgb{c}")
+        if not info.get("orden_etiquetas_confiable", True):
+            print(f"   ⚠️  Las dos camisetas tienen luminancia parecida (< {MIN_DIF_LUMINANCIA}): "
+                  f"las etiquetas home/away podrían invertirse entre corridas. Verificá con los colores.")
     else:
         print("   ⚠️ No se pudo calcular el clustering (¿muy pocas muestras válidas?).")
