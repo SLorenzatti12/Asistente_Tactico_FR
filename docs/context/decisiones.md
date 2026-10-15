@@ -37,6 +37,40 @@ Resumen de decisiones con motivo. Detalle completo en `docs/bitacora_2026-08-17.
 
 **Si se rompe:** la alternativa de respaldo (sin dependencias) es reemplazar el drag-and-drop por botones ▲▼ de subir/bajar por fila.
 
+## Base de datos híbrida: se agrega Supabase sin abandonar SQLite
+
+**Contexto:** `7-stack-tecnologico.md` justificó SQLite descartando motores
+cliente-servidor (Postgres/MySQL) por la premisa de procesamiento 100%
+offline en el estadio. Esa decisión se mantiene sin cambios para todo lo
+que ocurre durante el partido.
+
+**Por qué se agrega igual:** SQLite es un archivo en una sola laptop — no
+resuelve que un coach vea el semáforo desde su casa, ni un historial de
+partidos consolidado del equipo, ni gestión de usuarios/roles. Nada de eso
+es necesario en cancha, pero sí después.
+
+**Decisión:** arquitectura híbrida. SQLite sigue siendo la única base
+durante el procesamiento/tagueo offline, sin ningún cambio de flujo.
+Supabase (Postgres gestionado) se agrega como segunda capa, alimentada por
+un sync manual y unidireccional (local → nube) que se corre solo cuando hay
+conexión — no es un servidor que se instale en la laptop del analista, es
+una API a la que se llama después. Detalle completo en
+`8-base-de-datos-hibrida.md`.
+
+**Row Level Security (RLS): desactivada por ahora.** Al correr
+`db/schema_cloud.sql` por primera vez (23/09/2026), Supabase avisa que las
+tablas quedan sin RLS y ofrece activarla. Se eligió **no activarla**
+todavía: el código (`src/db/sync.py`) usa una única key pública
+("publishable"/anon) para todas las operaciones, y activar RLS sin
+políticas escritas hace que Postgres bloquee todo por default —
+rompería el sync entero sin ganar seguridad real (no hay con qué
+distinguir usuarios todavía, no hay Auth). **Consecuencia:** cualquiera
+con esa key pública puede leer/escribir las tablas directo contra la API
+de Supabase, sin pasar por la app. Aceptable para esta etapa (proyecto de
+facultad, un solo equipo, sin datos sensibles de terceros); revisar
+cuando se agregue Auth — ver el pendiente correspondiente en
+`8-base-de-datos-hibrida.md`.
+
 ## Versiones fijadas de detección/tracking + línea base de regresión (13/10/2026)
 
 **Qué cambió:** se actualizó `inference` 1.4.1 → 1.7.3 (arrastra `inference-sdk` 1.7.3, `inference-models` 0.39.1 y `supervision` 0.30.7). Quedan fijadas con versión exacta en `requirements.txt` para que los tres tengamos lo mismo.

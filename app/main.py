@@ -31,6 +31,11 @@ from components.player_stats_view import render_player_stats
 # Reproductor de video sincronizado con el mapa (CCv2) — reemplaza a st.video()
 from components.video_sync import render_video_sincronizado
 
+# Base híbrida (Nico): equipo/categoría del partido, plantel y registro de
+# la ruta del video local para el sync a Supabase (scripts/sync_to_cloud.py).
+from components.team_selector import render_team_selector
+from components.video_registry import render_video_registry
+
 # Patrones tácticos detectados (src/analysis/tactical_patterns.py)
 from components.tactical_patterns_view import render_tactical_patterns_tab
 
@@ -514,6 +519,9 @@ def main():
     with st.container(border=True):
         st.markdown("##### 📁 Partido")
         match = match_selector()
+        if match is not None:
+            render_team_selector(match["name"])
+            render_video_registry(match["name"], default_path=match["video_path"])
     if match is None:
         return
 

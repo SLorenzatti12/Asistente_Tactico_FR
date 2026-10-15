@@ -6,7 +6,6 @@ PERSONA C — Botones de tagueo one-click, timeline + tarjetas de eventos
 guardado en SQLite.
 """
 
-import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -20,10 +19,16 @@ from streamlit_sortables import sort_items
 # se vea igual en todos lados (ver components/map_view.py).
 from components.map_view import TEAM_COLORS, TEAM_LABELS
 
+# Gestión del plantel por equipo (alta/baja, una sola vez por equipo,
+# reutilizado en todos sus partidos) — Nico, reemplaza la edición manual
+# de data/roster.json por una tabla SQLite (ver src/db/roster_repo.py,
+# src/db/team_repo.py y components/roster_view.py).
+from components.roster_view import render_roster_manager
+from db import roster_repo, team_repo
+
 from theme import STATUS_COLORS
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "db" / "analizador.sqlite"
-ROSTER_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "roster.json"
 
 # Semilla de event_types la primera vez que se crea la tabla (ver init_db).
 # Ya no es la lista "viva" de botones — eso ahora sale de la base.
@@ -306,18 +311,22 @@ def get_events(match_name: str) -> pd.DataFrame:
 
 def load_roster(match_name: str) -> list[dict]:
     """
-    Nómina real (número + nombre) para este partido, leída de data/roster.json.
-    Si no hay nómina cargada para este match_name, cae a números sueltos del
-    1 al 11 para no romper la pantalla de semáforo mientras tanto.
+    Plantel (número + nombre) del equipo asignado a este partido —ver
+    team_repo.get_match_team / components/team_selector.py—, leído de
+    SQLite (tabla `roster`, cargada/editada desde la app — ver
+    render_roster_manager en components/roster_view.py). Es el mismo
+    plantel para todos los partidos de ese equipo — no se carga por
+    partido. Si todavía no se asignó equipo o no se cargó ningún jugador,
+    cae a números sueltos del 1 al 11 para no romper la pantalla de
+    semáforo mientras tanto.
     """
-    if ROSTER_PATH.exists():
-        try:
-            data = json.loads(ROSTER_PATH.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            data = {}
-        roster = data.get(match_name)
-        if roster:
-            return roster
+    roster_repo.init_roster_table()
+    equipo = team_repo.get_match_team(match_name)
+    if equipo is None:
+        return [{"number": n, "name": f"Jugador #{n}"} for n in range(1, 12)]
+    roster = roster_repo.list_players(equipo["team_id"])
+    if roster:
+        return roster
     return [{"number": n, "name": f"Jugador #{n}"} for n in range(1, 12)]
 
 
@@ -868,18 +877,33 @@ def render_semaforo_tab(match_name: str) -> None:
     st.markdown("**Semáforo post-partido**")
     st.caption("Calificación individual — hacé clic para evaluar a cada jugador.")
 
+    equipo = team_repo.get_match_team(match_name)
+    if equipo is None:
+        st.warning(
+            "Este partido todavía no tiene equipo/categoría asignado — "
+            "asignalo en el panel «📁 Partido» de arriba para poder cargar "
+            "su plantel."
+        )
+    else:
+        with st.expander(f"⚙️ Gestionar plantel — {equipo['team_name']}"):
+            render_roster_manager(equipo["team_id"])
+
     roster = load_roster(match_name)
     if all(p["name"].startswith("Jugador #") for p in roster):
-        st.caption("⚠️ Nómina no cargada todavía para este partido — mostrando números sueltos (ver data/roster.json).")
+        st.caption("⚠️ Todavía no cargaste el plantel de este equipo — mostrando números sueltos.")
 
-    for player in roster:
+    for idx, player in enumerate(roster):
+        # Las keys se indexan por posición, no por dorsal: el dorsal puede
+        # repetirse o faltar (varios jugadores sin numerar) y Streamlit
+        # exige keys únicas — usar `n` acá rompía el tab entero apenas
+        # había dos jugadores con el mismo número (o ninguno).
         n = player["number"]
         col_num, col_btns = st.columns([1, 3])
-        col_num.write(f"**#{n}** {player['name']}")
+        col_num.write(f"**#{n if n is not None else '-'}** {player['name']}")
         b1, b2, b3 = col_btns.columns(3)
-        if b1.button("🔴", key=f"low_{n}"):
+        if b1.button("🔴", key=f"low_{idx}"):
             save_semaforo(match_name, n, "bajo")
-        if b2.button("🟡", key=f"mid_{n}"):
+        if b2.button("🟡", key=f"mid_{idx}"):
             save_semaforo(match_name, n, "regular")
-        if b3.button("🟢", key=f"high_{n}"):
+        if b3.button("🟢", key=f"high_{idx}"):
             save_semaforo(match_name, n, "destacado")
