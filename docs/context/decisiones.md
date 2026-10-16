@@ -265,8 +265,8 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 
 | Video | Track / patrón | Lo que dijo el sistema | Lectura humana | Consecuencia |
 |---|---|---|---|---|
-| `partido_clip2` (Mundial 2026, Noruega–Francia, cámara de transmisión) | track 8 o 17 (falta registrar cuál es cuál): jugador que se abre para recibir un pase — `desconectado` | severidad **1.00**, desviación sostenida (proporción 0.58) | **falso positivo** (DT): se despega por un motivo tácticamente correcto | `PROPORCION_MIN_DESCONEXION` = 0.70 |
-| ídem | track 8 o 17: jugador que hace marca personal — `desconectado` | severidad **1.00**, desviación sostenida (proporción 0.59) | **falso positivo** (DT): ídem | ídem |
+| `partido_clip2` (Mundial 2026, Noruega–Francia, cámara de transmisión) | track 8: jugador que se abre hacia la línea para recibir — `desconectado` | severidad **1.00**, desviación sostenida (proporción 0.58) | **falso positivo** (DT): se despega por un motivo tácticamente correcto | `PROPORCION_MIN_DESCONEXION` = 0.70 |
+| ídem | track 17: jugador que hace marca personal (seguía al track 4) — `desconectado` | severidad **1.00**, desviación sostenida (proporción 0.59) | **falso positivo** (DT): ídem | ídem |
 | ídem | track 21/74 (la misma persona en dos tracks: 21 → 74, se solapan 0.30 s a 13 cm) — `no_achica` | con los umbrales de entonces (bastaban 2 subidas en el clip): track 21, severidad **1.00**, déficit en **1 de 4** subidas, valor técnico 17.8; su continuación, track 74, severidad 0.54, **1 de 1**, valor técnico 4.3. Evidencia de los dos: 0:30.2–0:40.1 | **falso positivo** (revisado contra el video): seguía la basculación normal del equipo, no era una falla del jugador | `MIN_FASES_ATAQUE` de 2 a 4 y `PROPORCION_MIN_NO_ACHICA` = 0.5 estricto (hacen falta al menos 3 de 4 subidas). Además fue el caso que calibró `MAX_SOLAPAMIENTO_FUSION_SEG` para los candidatos a fusión |
 | `sportivo_crop3` (Sportivo–Crecer, cámara fija nocturna, calibración validada) | track 626 (home), banda cercana cerca de la mitad de cancha — `desconectado` | severidad **1.00** ("tendencia marcada"), 81% del tiempo en cancha, evidencia 4:48.7–5:24.7 | **desvío real pero leve, aceptable** (revisado por Santi, 16/10/2026) | ninguna todavía (ver abajo) |
 
@@ -278,12 +278,17 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 - La severidad satura en 1.0 con duplicar la distancia típica de la línea (`UMBRAL_SEVERIDAD_MAX_DESCONEXION`). Para un jugador de banda, en una línea que se estira a lo ancho, eso puede ser poco.
 - **Con un solo caso no se recalibra.** Queda como evidencia para cuando haya más casos revisados con lectura humana de la intensidad, no solo de si es real o falso.
 
-**El caso 626 no se reproduce después del arreglo del bug de clases.** Con el reproceso, el mismo jugador pasa a ser el track 587:
+**Caso 626 → 587: el módulo de patrones es sensible a cambios en el tracking.** El arreglo del bug de clases no tocó al jugador (mismas cajas, mismo video), pero cambió la línea que el sistema le asigna, y el caso desapareció. Con el reproceso, el mismo jugador pasa a ser el track 587:
 - Empieza 16 s antes (4:32.3–5:24.7) y tiene 430 filas en vez de 307.
 - Su línea mayoritaria pasó de **ataque** a **mediocampo**.
 - Contra la referencia de mediocampo se despega 1.30 veces (antes 2.11 contra la de ataque), por debajo del umbral de 1.50, así que ya no se reporta.
 - En su lugar aparece otro caso, el track 2374 (home, `desconectado`, 21:07.0–21:45.7), todavía sin revisar contra el video.
-- **Lectura:** el patrón depende de en qué línea queda clasificado el jugador, y eso cambia con detalles del tracking (dónde empieza el track, qué filas cuentan). Es otra razón para presentar los casos como momentos para revisar y no como un diagnóstico del jugador.
+- **Lectura:** el patrón depende de en qué línea queda clasificado el jugador, y eso cambia con detalles del tracking (dónde empieza el track, qué filas cuentan como `player`). Un cambio de infraestructura que no tiene nada que ver con lo que hizo el jugador apaga o prende un caso.
+
+**Decisión: los patrones se presentan como señal experimental, no como diagnóstico (16/10/2026).** Por las dos evidencias de arriba: la severidad máxima no predijo nada en 4 de 4 casos revisados, y el mismo jugador entra o sale del reporte según detalles del tracking.
+- Cada caso se muestra como **"Momento para revisar"**, con sus tramos de video. El texto describe qué se midió y las dos lecturas posibles, sin calificar la intensidad: se sacaron "tendencia leve/moderada/marcada".
+- La severidad **solo ordena la lista** y aparece en la fila técnica (consola y pestaña). La pestaña ya no tiene etiquetas ni filtro por severidad, y la lista se titula "Momentos para revisar (N)".
+- Esto no cambia qué se detecta (umbrales iguales), solo cómo se le presenta al DT.
 
 **Para reproducir el caso 626 original:** la numeración de tracks corresponde al procesamiento anterior al arreglo del bug de clases. Usar `sportivo_crop3_coords_field_bug_clase.parquet` y `sportivo_crop3_tracked_bug_clase.mp4` en `data/outputs/`. En el reproceso los números de track cambian.
 

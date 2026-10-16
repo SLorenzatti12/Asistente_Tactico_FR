@@ -55,8 +55,13 @@ de distancia al centroide = 2.3". El número técnico va aparte, en la
 columna `valor_tecnico` — ahí si conviene ser preciso, para quien quiera
 auditar el número. Y ningún patrón se afirma como verdad absoluta: son
 señales estadísticas sobre datos con tracking fragmentado y homografía
-imperfecta, así que el wording usa siempre "posible"/"tendencia a", nunca
-una afirmación categórica.
+imperfecta. Cada caso se presenta como "Momento para revisar", con sus
+tramos de video, y NUNCA con un calificador de intensidad: hasta el
+16/10/2026 el texto decía "tendencia leve/moderada/marcada" según la
+severidad, y los 4 casos revisados contra video con severidad máxima
+("marcada") resultaron 3 falsos positivos y 1 desvío leve (ver
+decisiones.md, "Validación de tactical_patterns contra video"). La
+severidad queda solo para ORDENAR la lista y como dato técnico.
 
 LIMITACIÓN CONOCIDA — dirección de ataque depende del arquero
 ------------------------------------------------------------------
@@ -432,15 +437,6 @@ def _segmentos_contiguos(frames, tiempos, mascara, min_duracion_seg: float) -> l
     return segmentos
 
 
-def _calificador(severidad: float) -> str:
-    """Traduce una severidad [0,1] a un adjetivo de lectura futbolística."""
-    if severidad >= 0.66:
-        return "marcada"
-    if severidad >= 0.33:
-        return "moderada"
-    return "leve"
-
-
 def _formatear_evidencia(segmentos: list, maximo: int = 3) -> str:
     """Los primeros `maximo` segmentos como texto 'mm:ss-mm:ss', para el CLI."""
     def mmss(seg):
@@ -746,7 +742,6 @@ def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
                 continue
 
             severidad = float(np.clip(exceso_relativo / UMBRAL_SEVERIDAD_MAX_DESCONEXION, 0.0, 1.0))
-            calif = _calificador(severidad)
             filas.append({
                 "track_id": track_id,
                 "team": team,
@@ -756,11 +751,12 @@ def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
                 "n_ocurrencias": len(segmentos),
                 "evidencia_seg": segmentos,
                 "descripcion": (
-                    f"Tendencia {calif} a despegarse en profundidad del resto de su línea "
-                    f"de forma sostenida ({proporcion_desviado:.0%} del tiempo en cancha) "
-                    f"— posible desconexión del bloque. Revisar en video: puede ser un "
-                    f"problema real o un movimiento correcto (desmarque, marca personal) "
-                    f"que este análisis no puede distinguir por sí solo."
+                    f"Momento para revisar. Durante buena parte de su tiempo en cancha "
+                    f"({proporcion_desviado:.0%}), este jugador estuvo más despegado de su "
+                    f"línea, en profundidad, que el resto de sus compañeros de línea. Puede "
+                    f"ser una desconexión del bloque o un movimiento correcto (desmarque, "
+                    f"marca personal): el análisis no distingue entre las dos cosas. Mirá "
+                    f"los tramos marcados."
                 ),
             })
 
@@ -856,7 +852,6 @@ def _detectar_no_achica(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
             segmentos = [(a, b) for a, b, _ in ocurrencias]
             deficit_prom = float(np.mean([d for _, _, d in ocurrencias]))
             severidad = float(np.clip(deficit_prom / UMBRAL_SEVERIDAD_MAX_NO_ACHICA_M, 0.0, 1.0))
-            calif = _calificador(severidad)
             filas.append({
                 "track_id": track_id,
                 "team": team,
@@ -866,11 +861,11 @@ def _detectar_no_achica(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
                 "n_ocurrencias": len(ocurrencias),
                 "evidencia_seg": segmentos,
                 "descripcion": (
-                    f"Tendencia {calif} a no acompañar el avance de su línea cuando "
-                    f"el equipo sube — posible falta de achique. Se repite en "
-                    f"{len(ocurrencias)} de las {total_fases} subidas evaluadas "
-                    f"— revisar en video antes de concluir nada, puede ser "
-                    f"basculación normal del equipo."
+                    f"Momento para revisar. Cuando el equipo subió, este jugador quedó "
+                    f"atrás del avance de su línea en {len(ocurrencias)} de las "
+                    f"{total_fases} subidas evaluadas. Puede ser falta de achique o "
+                    f"basculación normal del equipo: el análisis no distingue entre las "
+                    f"dos cosas. Mirá los tramos marcados."
                 ),
             })
 
@@ -1172,12 +1167,15 @@ def _imprimir_patrones(patrones: pd.DataFrame) -> None:
     if patrones.empty:
         return
 
+    # Ya vienen ordenados por severidad (detectar_patrones): la severidad
+    # ordena la lista y va en la línea técnica, nunca en el texto para el DT.
     for _, fila in patrones.iterrows():
-        print(f"\n● track {fila.track_id} ({fila.team}) — {fila.patron}  "
-              f"[severidad {fila.severidad:.2f}, {len(fila.evidencia_seg)} ocurrencia(s)]")
+        print(f"\n● Para revisar — track {fila.track_id} ({fila.team}), {fila.patron} "
+              f"· {len(fila.evidencia_seg)} tramo(s)")
         print(f"  {fila.descripcion}")
-        print(f"  técnico: valor_tecnico={fila.valor_tecnico}")
-        print(f"  evidencia: {_formatear_evidencia(fila.evidencia_seg)}")
+        print(f"  tramos: {_formatear_evidencia(fila.evidencia_seg)}")
+        print(f"  técnico: severidad {fila.severidad:.2f} (solo ordena la lista) · "
+              f"valor_tecnico={fila.valor_tecnico}")
         if fila.posible_mismo_jugador_que:
             tracks = ", ".join(str(t) for t in fila.posible_mismo_jugador_que)
             print(f"  ⚠️  posible el mismo jugador que track(s): {tracks} "
@@ -1246,7 +1244,7 @@ Ejemplo:
     if patrones.empty:
         _imprimir_resumen_sin_patrones(fases)
     else:
-        print("Patrones detectados:")
+        print(f"Momentos para revisar ({len(patrones)}), ordenados de más a menos señal:")
         _imprimir_patrones(patrones)
 
     print("\n" + "=" * 78)
