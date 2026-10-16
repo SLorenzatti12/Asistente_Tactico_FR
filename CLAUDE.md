@@ -56,6 +56,8 @@ python src/detection/run_inference.py data/videos/<clip>.mp4
 #    y pasarlo al calibrar — quedan copiadas en la calibración y en el parquet.
 python scripts/estadios.py alta "<estadio>" --largo <m> --ancho <m>
 python src/homography/calibrate.py data/videos/<clip>.mp4 --estadio "<estadio>"
+#    (o, con puntos medidos sobre la imagen en vez de clics:
+#     --puntos-archivo data/calibracion/<clip>_puntos_f<N>.json)
 python src/homography/calibrate.py data/videos/<clip>.mp4 --apply data/outputs/<clip>_coords.parquet
 ```
 

@@ -43,6 +43,10 @@ MEDIDAS_REGLAMENTARIAS = {
     "distancia_penal": 11.0,     # punto penal, desde la línea de fondo
 }
 
+# Ancho del arco entre postes (m). No es medida del estadio: los arcos son
+# de fábrica y reglamentarios aunque la cancha no lo sea.
+ANCHO_ARCO = 7.32
+
 CLAVE_ATTRS = "medidas_cancha"   # clave en df.attrs y en el JSON de calibración
 
 

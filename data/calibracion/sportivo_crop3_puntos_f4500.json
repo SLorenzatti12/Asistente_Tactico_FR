@@ -1,0 +1,17 @@
+{
+  "video": "sportivo_crop3.mp4",
+  "frame": 4500,
+  "origen": "ajuste_de_lineas",
+  "descripcion": "Puntos medidos sobre la imagen (no clics): rectas ajustadas al sub-píxel sobre el top-hat del brillo (perfiles perpendiculares), elipse ajustada a las crestas del círculo central, y lectura sobre ampliaciones ×5–×6 donde no hay dos líneas que cruzar. Variante de 9 puntos sin el área grande derecha, que está pintada más chica que la reglamentaria (~15.0 × 38.7 m). Cancha 102×75 (Sportivo Belgrano). Validación en seco: todas las líneas visibles a ≤0.2 m. Ver docs/context/decisiones.md.",
+  "puntos": [
+    {"nombre": "poste_sup_izq",             "px": [89.0, 129.0],   "metodo": "base del poste lejano, sobre ampliación ×5"},
+    {"nombre": "area_chica_frente_sup_izq", "px": [238.0, 112.5],  "metodo": "extremo de la recta ajustada del frente del área chica (perfil a lo largo de la línea)"},
+    {"nombre": "arco_area_sup_izq",         "px": [375.0, 114.0],  "metodo": "punta de la medialuna sobre la línea del área, ampliación ×6"},
+    {"nombre": "arco_area_inf_izq",         "px": [205.0, 160.0],  "metodo": "donde la medialuna se separa de la recta ajustada del frente del área (perfil normal)"},
+    {"nombre": "circulo_mitad_sup",         "px": [880.3, 100.7],  "metodo": "elipse ajustada al círculo central ∩ recta ajustada de la línea media"},
+    {"nombre": "circulo_mitad_inf",         "px": [847.5, 156.9],  "metodo": "elipse ajustada al círculo central ∩ recta ajustada de la línea media"},
+    {"nombre": "poste_sup_der",             "px": [1667.0, 101.0], "metodo": "base del poste lejano, sobre ampliación ×5"},
+    {"nombre": "poste_inf_der",             "px": [1769.0, 121.0], "metodo": "base del poste cercano, sobre ampliación ×5"},
+    {"nombre": "area_chica_inf_der",        "px": [1870.3, 140.8], "metodo": "línea de fondo (por las bases de los postes) ∩ recta ajustada del lateral del área chica; el lateral visible termina en x≈1871"}
+  ]
+}

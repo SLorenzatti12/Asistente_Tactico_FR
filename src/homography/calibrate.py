@@ -25,6 +25,9 @@ Uso:
     # Paso 2: aplicar la calibración a las coordenadas ya detectadas
     python src/homography/calibrate.py data/videos/partido.mp4 --apply data/outputs/partido_coords.parquet
 
+    # Calibrar con puntos medidos fuera de la ventana (archivo .json, ver calibrar_desde_archivo)
+    python src/homography/calibrate.py data/videos/partido.mp4 --puntos-archivo data/calibracion/partido_puntos.json
+
     # Auditar una calibración ya guardada (sin recalibrar), opcionalmente en otro frame
     python src/homography/calibrate.py data/videos/partido.mp4 --verificar [--frame 3000]
 
@@ -35,10 +38,13 @@ Control de calidad:
     ellos la homografía coincide por construcción y el error no dice nada).
     Se guarda <video>_calibracion_control.png y el veredicto queda en el .json:
     "ok", "revisar" o "no_verificable". Ver control_calidad().
-    Límites conocidos del control: las líneas muy tenues (noche, lejos de la
-    cámara) pueden no detectarse y contar como "sin línea cerca"; y una línea
-    proyectada mal puede "encontrar" otra línea real cercana y subestimar su
-    error. Por eso la imagen es la referencia final, no solo el número.
+    Las marcas que no se ven en el cuadro (banda tapada por carteles, líneas
+    muy tenues) quedan como "no verificadas" — en gris en la imagen — y no
+    cuentan ni a favor ni en contra. Una marca que se ve pero está corrida más
+    de 4 m sí cuenta como falla (se la busca, paralela, en una banda ancha).
+    Límites: lo que no se ve no se puede verificar, y una línea proyectada mal
+    puede "encontrar" otra línea real cercana y subestimar su error. Por eso
+    la imagen es la referencia final, no solo el número.
 """
 
 import argparse
@@ -55,7 +61,7 @@ OUTPUTS = ROOT / "data" / "outputs"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from src.homography.medidas_cancha import (  # noqa: E402
-    CLAVE_ATTRS, MEDIDAS_REGLAMENTARIAS, completar_medidas, descripcion, offset_medialuna,
+    ANCHO_ARCO, CLAVE_ATTRS, MEDIDAS_REGLAMENTARIAS, completar_medidas, descripcion, offset_medialuna,
 )
 
 # ── Dimensiones de cancha (metros) ─────────────────────────
@@ -79,7 +85,7 @@ def puntos_referencia(medidas: dict | None = None) -> dict:
     m = completar_medidas(medidas)
     L, W = m["largo"], m["ancho"]
     ag_l, ag_a = m["area_grande_largo"], m["area_grande_ancho"]
-    ac_a, r = m["area_chica_ancho"], m["radio_circulo"]
+    ac_l, ac_a, r = m["area_chica_largo"], m["area_chica_ancho"], m["radio_circulo"]
     medialuna = offset_medialuna(m)
     return {
         "esquina_sup_izq":      (0.0, 0.0),
@@ -111,6 +117,19 @@ def puntos_referencia(medidas: dict | None = None) -> dict:
         "arco_area_inf_der":    (L - ag_l, W / 2 + medialuna),
         "arco_area_sup_izq":    (ag_l, W / 2 - medialuna),
         "arco_area_inf_izq":    (ag_l, W / 2 + medialuna),
+        # Base de cada poste (donde toca el pasto, sobre la línea de fondo):
+        # bien definida aunque las líneas estén gastadas. "sup" = poste del
+        # lado de la banda lejana (y chica), "inf" = del lado de la cercana.
+        "poste_sup_izq":        (0.0, W / 2 - ANCHO_ARCO / 2),
+        "poste_inf_izq":        (0.0, W / 2 + ANCHO_ARCO / 2),
+        "poste_sup_der":        (L, W / 2 - ANCHO_ARCO / 2),
+        "poste_inf_der":        (L, W / 2 + ANCHO_ARCO / 2),
+        # Esquinas del FRENTE del área chica (las "area_chica_*" de arriba
+        # están sobre la línea de fondo).
+        "area_chica_frente_sup_izq": (ac_l, W / 2 - ac_a / 2),
+        "area_chica_frente_inf_izq": (ac_l, W / 2 + ac_a / 2),
+        "area_chica_frente_sup_der": (L - ac_l, W / 2 - ac_a / 2),
+        "area_chica_frente_inf_der": (L - ac_l, W / 2 + ac_a / 2),
     }
 
 
@@ -138,15 +157,43 @@ QC_PASO_MUESTREO_M = 1.0      # cada cuántos metros se muestrea cada línea
 # Las muestras más cerca que esto de un punto de ajuste no cuentan: ahí la
 # proyección coincide por construcción y mediría el ajuste, no la calidad.
 QC_RADIO_EXCLUSION_M = 4.0
-# Radio (px) donde se busca la línea de cal real alrededor de cada muestra
-# proyectada. Más allá, la muestra cuenta como "sin línea cerca".
-QC_RADIO_BUSQUEDA_PX = 40
+# Distancia (en la CANCHA, no en píxeles) a la que se busca la línea real a
+# cada lado de la marca proyectada. Antes era un radio fijo de 40 px: en la
+# zona lejana de una cámara baja eso son ~13 m y enganchaba bordes de carteles.
+QC_RADIO_BUSQUEDA_M = 4.0
+QC_BUSQUEDA_MAX_PX = 60       # ...pero nunca más de esto por lado (en la zona cercana 4 m son muchos px)
+QC_TOPHAT_MIN = 8             # altura mínima de una cresta de línea (top-hat del brillo, 0-255)
+QC_PROMINENCIA = 5            # cuánto tiene que bajar el top-hat a cada lado de la cresta
+QC_SATURACION_RELATIVA = 8    # la línea tiene que ser al menos esto menos saturada que el pasto de alrededor
+# Una marca es "visible" (y entra en el veredicto) si se encuentra la línea
+# real en al menos esta fracción de sus muestras dentro del cuadro, y en al
+# menos QC_MIN_MUESTRAS_VISIBLE. Si no, se informa como "no verificada".
+QC_MIN_SOPORTE = 0.3
+QC_MIN_MUESTRAS_VISIBLE = 8
+QC_MIN_LINEAS_VERIFICADAS = 3 # menos líneas verificadas que esto → "no verificable"
+# "No se ve" vs "está corrida": si cerca de la proyección no hay línea, se
+# busca en una banda ANCHA una línea PARALELA a la proyectada (orientación
+# local de la imagen). Si aparece, la marca sí se ve pero la calibración la
+# proyecta corrida → falla. Sin esto, una calibración corrida más de
+# QC_RADIO_BUSQUEDA_M quedaba como "no verificada" y el control daba OK
+# (pasaba con la calibración vieja de sportivo_crop3, banda cercana 6 m corrida).
+QC_RADIO_AMPLIO_M = 15.0
+QC_BUSQUEDA_AMPLIA_MAX_PX = 150
+# En la banda ancha solo cuentan líneas casi paralelas a la proyectada (así no
+# se engancha una línea que cruza). Tolerancia amplia a propósito: una
+# calibración mala también ROTA las líneas — con los clics de sportivo_crop3
+# la línea media proyectada quedaba girada ~20° respecto de la real.
+QC_TOLERANCIA_ANGULO = 35.0
+# Las muestras "lejos" de una marca son una línea real (y no enganches al
+# azar) si su distancia a la marca cambia suave de una muestra a la vecina.
+QC_SUAVIDAD_LEJOS_M = 0.75
+QC_MIN_FRACCION_LEJOS = 0.15
 QC_ERROR_OK_M = 1.0           # error mediano máximo para un veredicto "ok"
 QC_ERROR_LINEA_MAX_M = 2.0    # ninguna línea individual puede superar esto
 QC_MIN_MUESTRAS_LINEA = 15    # ...si se la pudo verificar con al menos tantas muestras
 QC_MIN_MUESTRAS = 30          # menos muestras verificadas que esto → "no verificable"
-# Fracción máxima de muestras proyectadas DENTRO del cuadro sin ninguna línea
-# real cerca. Si es alta, hay líneas proyectadas donde no hay nada pintado.
+# Fracción máxima de muestras de las líneas VERIFICADAS sin la línea real
+# encontrada (las no verificadas no cuentan acá: ver control_calidad).
 QC_MAX_SIN_LINEA = 0.5
 
 
@@ -182,41 +229,101 @@ def _muestrear(polilinea, paso: float) -> np.ndarray:
     return np.vstack(tramos)
 
 
-def _mascara_lineas(frame: np.ndarray) -> np.ndarray:
+def _mapas_lineas(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Píxeles de líneas de cal: más claros que su entorno (top-hat), poco
-    saturados (blanco) y sobre o pegados al pasto. Se descartan manchas
-    compactas (jugadores de camiseta clara, pelota) — las líneas son largas.
+    Tres mapas para buscar líneas de cal:
+      - `tophat`: cuánto más claro es cada píxel que su entorno (top-hat del
+        brillo). Una línea es una cresta en este mapa.
+      - `candidato`: dónde PUEDE haber una línea: menos saturado que el pasto
+        de alrededor y con pasto a ambos lados.
+      - `direccion`: ángulo (rad) de la dirección local de la línea, del
+        tensor de estructura del top-hat — para exigir que la línea
+        encontrada sea paralela a la marca proyectada.
+    Saturación RELATIVA al pasto, no un umbral fijo: con luz amarillenta la
+    cal no es "blanca" (en Sportivo de noche tiene saturación ~93), pero sigue
+    siendo menos saturada que el pasto. Pasto a AMBOS lados (cierre
+    morfológico): rellena las líneas finas pintadas sobre el pasto, pero no el
+    borde de un cartel, que tiene pasto de un solo lado — sin esto, la base de
+    los carteles se confundía con la banda lejana.
     """
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-    tophat = cv2.morphologyEx(v, cv2.MORPH_TOPHAT, kernel)
-    # Saturación RELATIVA al pasto de alrededor, no un umbral fijo: con luz
-    # artificial amarillenta la cal no es "blanca" (en Sportivo de noche las
-    # líneas tienen saturación ~93), pero sigue siendo menos saturada que el
-    # pasto que la rodea.
+    tophat = cv2.morphologyEx(v, cv2.MORPH_TOPHAT,
+                              cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))).astype(np.float32)
     s_entorno = cv2.blur(s, (31, 31)).astype(np.int16)
-    blanco = (tophat > 25) & (s.astype(np.int16) < s_entorno - 15)
+    menos_saturado = s.astype(np.int16) < s_entorno - QC_SATURACION_RELATIVA
     pasto = ((h >= 30) & (h <= 95) & (s > 40) & (v > 40)).astype(np.uint8)
-    # Pasto a AMBOS lados: un cierre morfológico "rellena" las líneas finas
-    # pintadas sobre el pasto, pero no el borde de un cartel de publicidad
-    # (que tiene pasto de un solo lado). Sin esto, el borde inferior de los
-    # carteles se confundía con la banda lejana.
     sobre_pasto = cv2.morphologyEx(pasto, cv2.MORPH_CLOSE,
                                    cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))).astype(bool)
-    mascara = (blanco & sobre_pasto).astype(np.uint8)
-    # Las líneas lejanas y finas salen partidas en pedacitos: se unen antes de filtrar.
-    mascara = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    gx = cv2.Sobel(tophat, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(tophat, cv2.CV_32F, 0, 1, ksize=3)
+    jxx = cv2.GaussianBlur(gx * gx, (0, 0), 2.0)
+    jyy = cv2.GaussianBlur(gy * gy, (0, 0), 2.0)
+    jxy = cv2.GaussianBlur(gx * gy, (0, 0), 2.0)
+    normal = 0.5 * np.arctan2(2 * jxy, jxx - jyy)          # dirección de máximo cambio = normal a la línea
+    return tophat, menos_saturado & sobre_pasto, normal + np.pi / 2
 
-    n, etiquetas, stats, _ = cv2.connectedComponentsWithStats(mascara, connectivity=8)
-    for i in range(1, n):
-        largo = max(stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT])
-        grosor = stats[i, cv2.CC_STAT_AREA] / largo        # espesor medio aproximado (px)
-        # Línea = fina; jugador/pelota = mancha gruesa y corta.
-        if largo < 20 or (grosor > 4.5 and largo < 200):
-            mascara[etiquetas == i] = 0
-    return mascara.astype(bool)
+
+def _buscar_cresta(tophat: np.ndarray, candidato: np.ndarray, p: np.ndarray, p_menos: np.ndarray,
+                   p_mas: np.ndarray, direccion: np.ndarray | None = None,
+                   dir_esperada: np.ndarray | None = None) -> np.ndarray | None:
+    """
+    Busca una línea de cal a lo largo del segmento p_menos → p_mas (la
+    perpendicular a la línea proyectada en p, ± QC_RADIO_BUSQUEDA_M en la
+    cancha). Devuelve el píxel (sub-píxel) de la cresta más cercana a p, o
+    None si no hay ninguna: una cresta es un máximo local del top-hat, sobre
+    un píxel candidato, con altura y prominencia mínimas. Con `direccion`
+    (mapa de _mapas_lineas) y `dir_esperada` (vector unitario en píxeles), la
+    línea en la cresta además tiene que ser paralela a la esperada.
+    """
+    largo = float(np.linalg.norm(p_mas - p_menos))
+    if largo < 1:
+        return None
+    n = int(np.ceil(largo / 0.5)) + 1                       # una muestra cada medio píxel
+    ts = np.linspace(0.0, 1.0, n)
+    pts = p_menos[None, :] + ts[:, None] * (p_mas - p_menos)[None, :]
+    alto, ancho = tophat.shape
+    dentro = (pts[:, 0] >= 0) & (pts[:, 0] <= ancho - 1) & (pts[:, 1] >= 0) & (pts[:, 1] <= alto - 1)
+    if dentro.sum() < 5:
+        return None
+    mapa_x = pts[:, 0].astype(np.float32).reshape(1, -1)
+    mapa_y = pts[:, 1].astype(np.float32).reshape(1, -1)
+    perfil = cv2.remap(tophat, mapa_x, mapa_y, cv2.INTER_LINEAR, borderValue=0).ravel()
+    xi = np.clip(np.round(pts[:, 0]).astype(int), 0, ancho - 1)
+    yi = np.clip(np.round(pts[:, 1]).astype(int), 0, alto - 1)
+    valido = dentro & candidato[yi, xi] & (perfil >= QC_TOPHAT_MIN)
+    k = 6                                                   # ±3 px para medir la prominencia
+    picos = []
+    for i in range(1, n - 1):
+        if not valido[i] or perfil[i] < perfil[i - 1] or perfil[i] < perfil[i + 1]:
+            continue
+        izq, der = perfil[max(i - k, 0):i], perfil[i + 1:i + 1 + k]
+        if len(izq) == 0 or len(der) == 0:
+            continue
+        # Cresta, no escalón: tiene que bajar a AMBOS lados.
+        if perfil[i] - izq.min() < QC_PROMINENCIA or perfil[i] - der.min() < QC_PROMINENCIA:
+            continue
+        if direccion is not None and dir_esperada is not None:
+            ang = direccion[yi[i], xi[i]]
+            coseno = abs(np.cos(ang) * dir_esperada[0] + np.sin(ang) * dir_esperada[1])
+            if coseno < np.cos(np.deg2rad(QC_TOLERANCIA_ANGULO)):
+                continue
+        picos.append(i)
+    if not picos:
+        return None
+    t_p = float(np.dot(p - p_menos, p_mas - p_menos) / largo ** 2)
+    i = min(picos, key=lambda j: abs(ts[j] - t_p))
+    a, b, c = perfil[i - 1], perfil[i], perfil[i + 1]
+    den = a - 2 * b + c
+    desplazamiento = 0.5 * (a - c) / den if den != 0 else 0.0   # vértice de la parábola, sub-píxel
+    return pts[i] + desplazamiento * (pts[1] - pts[0])
+
+
+def _distancia_a_polilinea(punto: np.ndarray, polilinea: np.ndarray) -> float:
+    a, b = polilinea[:-1], polilinea[1:]
+    ab = b - a
+    t = np.clip(np.einsum("ij,ij->i", punto - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0, 1)
+    return float(np.min(np.linalg.norm(a + t[:, None] * ab - punto, axis=1)))
 
 
 def control_calidad(frame: np.ndarray, H: np.ndarray, puntos_ajuste_m, ruta_png: Path,
@@ -224,21 +331,37 @@ def control_calidad(frame: np.ndarray, H: np.ndarray, puntos_ajuste_m, ruta_png:
     """
     Verifica una homografía (píxel → metros) contra las líneas de cal reales.
 
-    Proyecta las marcas de la cancha sobre `frame`, busca la línea real más
-    cercana a cada muestra y mide la distancia en metros — EXCLUYENDO las
-    muestras cerca de `puntos_ajuste_m` (los puntos usados para calcular H).
-    Guarda en `ruta_png` el frame con la superposición: magenta = líneas
-    proyectadas; muestras verde/amarillo/rojo según error; azul = proyectada
-    en el cuadro sin ninguna línea real cerca; círculo blanco = punto de ajuste.
+    Para cada muestra de cada marca proyectada (cada QC_PASO_MUESTREO_M),
+    busca una línea real sobre la perpendicular, a ± QC_RADIO_BUSQUEDA_M en
+    la cancha (ver _buscar_cresta), y mide en metros la distancia entre la
+    línea encontrada y la marca. Las muestras a menos de QC_RADIO_EXCLUSION_M
+    de los puntos de ajuste no cuentan: ahí la proyección coincide por
+    construcción.
 
-    Sirve igual para la calibración manual (puntos clickeados) y la
-    automática (keypoints inliers): no depende de cómo se obtuvo H.
-    `medidas`: las de la cancha (ver medidas_cancha.py); None → 105×68.
+    Líneas que no se ven: una marca con menos de QC_MIN_SOPORTE de sus
+    muestras con línea real encontrada (o menos de QC_MIN_MUESTRAS_VISIBLE) se
+    informa como NO VERIFICADA y no entra en el veredicto. Antes contaba como
+    error: en sportivo_crop3 la banda lejana no se ve (la tapan los carteles)
+    y el control la "medía" contra la base de los carteles con 7-12 m de
+    error; las líneas tenues del lado izquierdo no las detectaba y sumaban al
+    "% sin línea cerca".
+
+    Límite, a propósito explícito: una marca proyectada a MÁS de
+    QC_RADIO_BUSQUEDA_M de su línea real tampoco encuentra nada y queda "no
+    verificada" en vez de fallar. Por eso el veredicto exige al menos
+    QC_MIN_LINEAS_VERIFICADAS líneas verificadas, lista las no verificadas,
+    y la imagen las muestra en gris: una zona entera sin verificar se ve.
+
+    Guarda en `ruta_png` el frame con la superposición: magenta = marca
+    proyectada y verificada; muestras verde/amarillo/rojo según error; cruz
+    azul = muestra de una línea verificada sin línea real encontrada (jugador
+    encima, tramo borrado); gris = marca no verificada; círculo blanco = punto
+    de ajuste. `medidas`: las de la cancha (ver medidas_cancha.py); None → 105×68.
 
     Returns:
         dict con `veredicto` ("ok" | "revisar" | "no_verificable"), `motivos`,
-        métricas globales y por línea. "ok" solo se da con evidencia: si hay
-        pocas líneas visibles para verificar, el veredicto es "no_verificable".
+        métricas globales (solo líneas verificadas), `por_linea` (verificadas)
+        y `lineas_no_verificadas` (nombre → soporte).
     """
     alto, ancho = frame.shape[:2]
     ajuste = np.asarray(puntos_ajuste_m, dtype=np.float64).reshape(-1, 2)
@@ -251,90 +374,183 @@ def control_calidad(frame: np.ndarray, H: np.ndarray, puntos_ajuste_m, ruta_png:
     ref = ajuste.mean(axis=0) if len(ajuste) else np.array([m_cancha["largo"] / 2, m_cancha["ancho"] / 2])
     if (np.r_[ref, 1.0] @ Hinv.T)[2] < 0:
         Hinv = -Hinv
-    mascara = _mascara_lineas(frame)
-    from scipy.ndimage import distance_transform_edt
-    dist_px, (idx_y, idx_x) = distance_transform_edt(~mascara, return_indices=True)
+    tophat, candidato, direccion = _mapas_lineas(frame)
+
+    def a_px(puntos_m: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        homog = np.c_[puntos_m, np.ones(len(puntos_m))] @ Hinv.T
+        delante = homog[:, 2] > 1e-9                       # w<=0: detrás de la cámara
+        return homog[:, :2] / np.where(delante, homog[:, 2], 1)[:, None], delante
 
     vis = frame.copy()
-    por_linea, errores_m, errores_px = {}, [], []
-    n_en_cuadro = n_sin_linea = 0
+    por_linea, no_verificadas = {}, {}
+    errores_m, errores_por_linea, dibujo = [], {}, {}
+    n_en_cuadro_ver = n_sin_linea_ver = 0
 
     for nombre, polilinea in _lineas_cancha(m_cancha).items():
-        muestras = _muestrear(polilinea, QC_PASO_MUESTREO_M)
-        homog = np.c_[muestras, np.ones(len(muestras))] @ Hinv.T
-        delante = homog[:, 2] > 1e-9                     # w<=0: detrás de la cámara
-        px = homog[:, :2] / np.where(delante, homog[:, 2], 1)[:, None]
+        poli = np.asarray(polilinea, dtype=np.float64)
+        muestras = _muestrear(poli, QC_PASO_MUESTREO_M)
+        tangente = np.gradient(muestras, axis=0)
+        tangente /= np.maximum(np.linalg.norm(tangente, axis=1, keepdims=True), 1e-12)
+        normal = np.c_[-tangente[:, 1], tangente[:, 0]]
+        px, delante = a_px(muestras)
+        px_menos, ok_m = a_px(muestras - QC_RADIO_BUSQUEDA_M * normal)
+        px_mas, ok_p = a_px(muestras + QC_RADIO_BUSQUEDA_M * normal)
+        px_menos_a, _ = a_px(muestras - QC_RADIO_AMPLIO_M * normal)
+        px_mas_a, _ = a_px(muestras + QC_RADIO_AMPLIO_M * normal)
+        px_adelante, _ = a_px(muestras + 0.5 * tangente)      # para la dirección de la marca en píxeles
 
-        visibles = [p for p, ok in zip(px, delante) if ok and np.all(np.isfinite(p))]
-        if len(visibles) > 1:
-            cv2.polylines(vis, [np.array(visibles, np.int32)], False, (255, 0, 255), 2)
-
-        errs = []
-        for m, p, ok in zip(muestras, px, delante):
-            if not ok or not np.all(np.isfinite(p)):
+        marcas, errs, lejos, idx_lejos, n_en_cuadro = [], [], [], [], 0
+        for i, m in enumerate(muestras):
+            if not (delante[i] and ok_m[i] and ok_p[i]) or not np.all(np.isfinite(px[i])):
                 continue
-            x, y = int(round(p[0])), int(round(p[1]))
+            x, y = px[i]
             if not (0 <= x < ancho and 0 <= y < alto):
                 continue
             if len(ajuste) and np.min(np.linalg.norm(ajuste - m, axis=1)) < QC_RADIO_EXCLUSION_M:
-                cv2.circle(vis, (x, y), 2, (160, 160, 160), -1)
+                marcas.append(("ajuste", px[i], None))
                 continue
             n_en_cuadro += 1
-            d = dist_px[y, x]
-            if d > QC_RADIO_BUSQUEDA_PX:
-                n_sin_linea += 1
-                cv2.drawMarker(vis, (x, y), (255, 128, 0), cv2.MARKER_TILTED_CROSS, 8, 2)
+            # Ventana de búsqueda acotada en píxeles: en la zona cercana 4 m
+            # pueden ser cientos de píxeles y atravesar otras líneas.
+            d_menos, d_mas = px_menos[i] - px[i], px_mas[i] - px[i]
+            for d in (d_menos, d_mas):
+                largo = np.linalg.norm(d)
+                if largo > QC_BUSQUEDA_MAX_PX:
+                    d *= QC_BUSQUEDA_MAX_PX / largo
+            dir_px = px_adelante[i] - px[i]
+            dir_px = dir_px / max(np.linalg.norm(dir_px), 1e-9)
+            hallado = _buscar_cresta(tophat, candidato, px[i], px[i] + d_menos, px[i] + d_mas)
+            if hallado is None:
+                # ¿No se ve, o está más lejos? Banda ancha, solo paralelas.
+                a_menos, a_mas = px_menos_a[i] - px[i], px_mas_a[i] - px[i]
+                for d in (a_menos, a_mas):
+                    largo = np.linalg.norm(d)
+                    if np.isfinite(largo) and largo > QC_BUSQUEDA_AMPLIA_MAX_PX:
+                        d *= QC_BUSQUEDA_AMPLIA_MAX_PX / largo
+                lejano = None
+                if np.all(np.isfinite(a_menos)) and np.all(np.isfinite(a_mas)):
+                    lejano = _buscar_cresta(tophat, candidato, px[i], px[i] + a_menos, px[i] + a_mas,
+                                            direccion, dir_px)
+                if lejano is not None:
+                    real_m = cv2.perspectiveTransform(lejano.reshape(1, 1, 2).astype(np.float32), H).reshape(2)
+                    e = _distancia_a_polilinea(real_m.astype(np.float64), poli)
+                    if e > QC_RADIO_BUSQUEDA_M:
+                        lejos.append(e)
+                        idx_lejos.append(i)
+                        marcas.append(("lejos", px[i], e))
+                        continue
+                marcas.append(("sin_linea", px[i], None))
                 continue
-            real_px = np.array([[[idx_x[y, x], idx_y[y, x]]]], np.float32)
-            real_m = cv2.perspectiveTransform(real_px, H).reshape(2)
-            e = float(np.linalg.norm(real_m - m))
+            real_m = cv2.perspectiveTransform(hallado.reshape(1, 1, 2).astype(np.float32), H).reshape(2)
+            e = _distancia_a_polilinea(real_m.astype(np.float64), poli)
             errs.append(e)
-            errores_px.append(float(d))
-            color = (0, 200, 0) if e < 0.5 else (0, 220, 255) if e < 1.5 else (0, 0, 255)
-            cv2.circle(vis, (x, y), 3, color, -1)
-        if errs:
-            por_linea[nombre] = {"muestras": len(errs), "error_mediano_m": round(float(np.median(errs)), 2),
-                                 "error_p90_m": round(float(np.percentile(errs, 90)), 2)}
-        errores_m.extend(errs)
+            marcas.append(("medida", px[i], e))
 
+        soporte = len(errs) / n_en_cuadro if n_en_cuadro else 0.0
+        frac_lejos = len(lejos) / n_en_cuadro if n_en_cuadro else 0.0
+        visible = len(errs) >= QC_MIN_MUESTRAS_VISIBLE and soporte >= QC_MIN_SOPORTE
+        # Las muestras "lejos" forman una línea real si su error cambia suave
+        # entre muestras vecinas (los enganches al azar saltan).
+        saltos = [abs(lejos[k + 1] - lejos[k]) for k in range(len(lejos) - 1) if idx_lejos[k + 1] == idx_lejos[k] + 1]
+        lejos_coherente = (len(lejos) >= QC_MIN_MUESTRAS_VISIBLE and frac_lejos >= QC_MIN_FRACCION_LEJOS
+                           and len(saltos) >= QC_MIN_MUESTRAS_VISIBLE // 2
+                           and float(np.median(saltos)) <= QC_SUAVIDAD_LEJOS_M)
+        # Visible pero corrida: la línea real aparece, coherente, más lejos que cerca.
+        corrida = lejos_coherente and len(lejos) > len(errs)
+        if corrida:
+            visible = True
+        dibujo[nombre] = (muestras, px, delante, visible, marcas)
+        if corrida:
+            por_linea[nombre] = {"muestras": len(errs) + len(lejos), "soporte": round(soporte + frac_lejos, 2),
+                                 "error_mediano_m": round(float(np.median(errs + lejos)), 2),
+                                 "error_p90_m": round(float(np.percentile(errs + lejos, 90)), 2),
+                                 "corrida": True, "fraccion_lejos": round(frac_lejos, 2)}
+            errores_m.extend(errs + lejos)
+            n_en_cuadro_ver += n_en_cuadro
+            n_sin_linea_ver += n_en_cuadro - len(errs) - len(lejos)
+        elif visible:
+            por_linea[nombre] = {"muestras": len(errs), "soporte": round(soporte, 2),
+                                 "error_mediano_m": round(float(np.median(errs)), 2),
+                                 "error_p90_m": round(float(np.percentile(errs, 90)), 2),
+                                 "fraccion_lejos": round(frac_lejos, 2) if lejos_coherente else 0.0}
+            errores_m.extend(errs)
+            n_en_cuadro_ver += n_en_cuadro
+            n_sin_linea_ver += n_en_cuadro - len(errs)
+        elif n_en_cuadro:
+            no_verificadas[nombre] = {"muestras_en_cuadro": n_en_cuadro, "soporte": round(soporte, 2),
+                                      "fraccion_lejos": round(frac_lejos, 2)}
+
+    # ── Dibujo ──
+    for nombre, (muestras, px, delante, visible, marcas) in dibujo.items():
+        visibles = [p for p, ok in zip(px, delante) if ok and np.all(np.isfinite(p))]
+        if len(visibles) > 1:
+            color = (255, 0, 255) if visible else (150, 150, 150)
+            cv2.polylines(vis, [np.array(visibles, np.int32)], False, color, 2 if visible else 1)
+        for tipo, p, e in marcas:
+            x, y = int(round(p[0])), int(round(p[1]))
+            if tipo == "ajuste":
+                cv2.circle(vis, (x, y), 2, (160, 160, 160), -1)
+            elif not visible:
+                continue
+            elif tipo == "sin_linea":
+                cv2.drawMarker(vis, (x, y), (255, 128, 0), cv2.MARKER_TILTED_CROSS, 8, 2)
+            elif tipo == "lejos":
+                cv2.drawMarker(vis, (x, y), (0, 0, 255), cv2.MARKER_SQUARE, 8, 2)
+            else:
+                color = (0, 200, 0) if e < 0.5 else (0, 220, 255) if e < 1.5 else (0, 0, 255)
+                cv2.circle(vis, (x, y), 3, color, -1)
+        if not visible and nombre in no_verificadas:
+            en_cuadro = [p for t, p, _ in marcas if t != "ajuste"]
+            if en_cuadro:
+                p = en_cuadro[len(en_cuadro) // 2]
+                cv2.putText(vis, f"{nombre}: no se ve", (int(p[0]) + 4, int(p[1]) - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
     for m in ajuste:
         p = cv2.perspectiveTransform(m.reshape(1, 1, 2).astype(np.float32), Hinv).reshape(2)
         if np.all(np.isfinite(p)):
             cv2.circle(vis, (int(p[0]), int(p[1])), 9, (255, 255, 255), 2)
 
     n_ver = len(errores_m)
-    frac_sin_linea = n_sin_linea / n_en_cuadro if n_en_cuadro else 0.0
+    frac_sin_linea = n_sin_linea_ver / n_en_cuadro_ver if n_en_cuadro_ver else 0.0
     resultado = {
         "muestras_verificadas": n_ver,
-        "muestras_sin_linea_cerca": n_sin_linea,
-        "fraccion_sin_linea_cerca": round(frac_sin_linea, 2),
+        "lineas_verificadas": sorted(por_linea),
+        "fraccion_sin_linea_cerca": round(frac_sin_linea, 2),  # solo dentro de las líneas verificadas
         "error_mediano_m": round(float(np.median(errores_m)), 2) if n_ver else None,
         "error_p90_m": round(float(np.percentile(errores_m, 90)), 2) if n_ver else None,
-        "error_mediano_px": round(float(np.median(errores_px)), 1) if n_ver else None,
         "por_linea": por_linea,
+        "lineas_no_verificadas": no_verificadas,
+        "parametros": {"radio_busqueda_m": QC_RADIO_BUSQUEDA_M, "min_soporte": QC_MIN_SOPORTE},
     }
     motivos = []
-    if n_ver < QC_MIN_MUESTRAS:
+    if n_ver < QC_MIN_MUESTRAS or len(por_linea) < QC_MIN_LINEAS_VERIFICADAS:
         veredicto = "no_verificable"
-        motivos.append(f"solo {n_ver} muestras de línea visibles lejos de los puntos de ajuste "
-                       f"(mínimo {QC_MIN_MUESTRAS}) — no hay evidencia de que la calibración sea buena")
+        motivos.append(f"solo {len(por_linea)} líneas verificables con {n_ver} muestras lejos de los puntos "
+                       f"de ajuste (mínimo {QC_MIN_LINEAS_VERIFICADAS} líneas y {QC_MIN_MUESTRAS} muestras) — "
+                       f"no hay evidencia suficiente de que la calibración sea buena")
     else:
         if resultado["error_mediano_m"] > QC_ERROR_OK_M:
             motivos.append(f"error mediano {resultado['error_mediano_m']} m > {QC_ERROR_OK_M} m")
         # El promedio global puede esconder una línea muy corrida (p.ej. si
         # las bandas encajan bien y dominan la cuenta) — se mira cada una.
         for nombre, m in por_linea.items():
-            if m["muestras"] >= QC_MIN_MUESTRAS_LINEA and m["error_mediano_m"] > QC_ERROR_LINEA_MAX_M:
+            if m.get("corrida"):
+                motivos.append(f"{nombre}: la línea real se ve, pero a {m['error_mediano_m']} m de donde se "
+                               f"proyecta (más de {QC_RADIO_BUSQUEDA_M} m)")
+            elif m["muestras"] >= QC_MIN_MUESTRAS_LINEA and m["error_mediano_m"] > QC_ERROR_LINEA_MAX_M:
                 motivos.append(f"{nombre}: error mediano {m['error_mediano_m']} m (> {QC_ERROR_LINEA_MAX_M} m)")
+            elif m.get("fraccion_lejos", 0) >= QC_MIN_FRACCION_LEJOS:
+                motivos.append(f"{nombre}: en el {m['fraccion_lejos']:.0%} de sus muestras la línea real está "
+                               f"a más de {QC_RADIO_BUSQUEDA_M} m de donde se proyecta")
         if frac_sin_linea > QC_MAX_SIN_LINEA:
-            motivos.append(f"{frac_sin_linea:.0%} de las líneas proyectadas dentro del cuadro no tienen "
-                           f"ninguna línea real cerca — probablemente quedaron donde no hay nada pintado")
+            motivos.append(f"{frac_sin_linea:.0%} de las muestras de las líneas verificadas no encuentran la "
+                           f"línea real — la proyección está corrida o hay mucha oclusión")
         veredicto = "revisar" if motivos else "ok"
     resultado["veredicto"], resultado["motivos"] = veredicto, motivos
 
     color_v = {"ok": (0, 200, 0), "revisar": (0, 0, 255), "no_verificable": (0, 165, 255)}[veredicto]
-    texto = (f"CONTROL: {veredicto.upper()}  |  error mediano "
-             f"{resultado['error_mediano_m']} m  |  sin linea cerca {frac_sin_linea:.0%}  |  n={n_ver}")
+    texto = (f"CONTROL: {veredicto.upper()}  |  error mediano {resultado['error_mediano_m']} m  |  "
+             f"{len(por_linea)} lineas verificadas, {len(no_verificadas)} no se ven (gris)  |  n={n_ver}")
     cv2.rectangle(vis, (0, 0), (ancho, 34), (0, 0, 0), -1)
     cv2.putText(vis, texto, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color_v, 2)
     ruta_png.parent.mkdir(parents=True, exist_ok=True)
@@ -352,13 +568,21 @@ def imprimir_control(resultado: dict) -> None:
               f"mediano {resultado['error_mediano_m']} m, p90 {resultado['error_p90_m']} m "
               f"({resultado['muestras_verificadas']} muestras)")
         for nombre, m in sorted(resultado["por_linea"].items(), key=lambda kv: -kv[1]["error_mediano_m"]):
-            print(f"     {nombre:<16} {m['error_mediano_m']:>5} m  (n={m['muestras']})")
-    print(f"   Líneas proyectadas sin ninguna línea real cerca: {resultado['fraccion_sin_linea_cerca']:.0%}")
+            print(f"     {nombre:<16} {m['error_mediano_m']:>5} m  (n={m['muestras']}, "
+                  f"línea encontrada en el {m['soporte']:.0%} de sus muestras)")
+    no_ver = resultado.get("lineas_no_verificadas") or {}
+    if no_ver:
+        print("   No verificadas (no se ven en el cuadro, o están a más de "
+              f"{resultado.get('parametros', {}).get('radio_busqueda_m', QC_RADIO_BUSQUEDA_M)} m de donde se proyectan):")
+        for nombre, d in no_ver.items():
+            print(f"     {nombre:<16} línea encontrada en el {d['soporte']:.0%} de {d['muestras_en_cuadro']} muestras")
     for motivo in resultado["motivos"]:
         print(f"   - {motivo}")
     print(f"   Superposición guardada en: {resultado['imagen']}")
     if resultado["veredicto"] != "ok":
         print("   Mirá la imagen antes de usar esta calibración.")
+    elif no_ver:
+        print("   Mirá la imagen: las zonas de las líneas no verificadas no tienen evidencia a favor ni en contra.")
 
 
 class CalibrationUI:
@@ -459,6 +683,71 @@ def calibrate(video_path: Path, point_names: list = None, frame_idx: int = 0,
     if pixel_points is None:
         sys.exit("[INFO] Calibración cancelada.")
 
+    return _guardar_calibracion(video_path, frame, frame_idx, point_names, pixel_points, medidas,
+                                origen={"tipo": "clics_manuales"})
+
+
+def calibrar_desde_archivo(video_path: Path, archivo_puntos: Path, medidas: dict | None = None) -> Path:
+    """
+    Calibra con puntos leídos de un .json en vez de clics. Para puntos
+    medidos con más precisión que un clic (p.ej. intersecciones de líneas
+    ajustadas al sub-píxel sobre la imagen) y, más adelante, para el modo
+    semiautomático. En la zona lejana de una cámara baja 1 px de alto puede
+    ser ~0.3 m: con clics en la ventana reducida no se llega a esa precisión.
+
+    Formato del archivo:
+        {
+          "video": "sportivo_crop3.mp4",              # opcional, se avisa si no coincide
+          "frame": 4500,                              # frame sobre el que se midió
+          "origen": "ajuste_de_lineas",               # cómo se obtuvieron los puntos
+          "descripcion": "texto libre",               # opcional
+          "puntos": [
+            {"nombre": "circulo_mitad_sup", "px": [880.3, 100.7],
+             "metodo": "elipse del círculo ∩ recta de la línea media"},   # "metodo" opcional
+            ...
+          ]
+        }
+    El .json de la calibración deja registrado ese origen (no "clics_manuales").
+    """
+    with open(archivo_puntos) as f:
+        datos = json.load(f)
+    if datos.get("video") and datos["video"] != video_path.name:
+        print(f"[AVISO] El archivo de puntos es de '{datos['video']}' y se está calibrando '{video_path.name}'.")
+    puntos_archivo = datos.get("puntos") or []
+    point_names = [p["nombre"] for p in puntos_archivo]
+    invalidos = [n for n in point_names if n not in REFERENCE_POINTS]
+    if invalidos or len(point_names) < 4:
+        sys.exit(f"[ERROR] {archivo_puntos}: hacen falta al menos 4 puntos con nombres válidos. "
+                 f"No reconocidos: {invalidos}\n  Opciones válidas: {list(REFERENCE_POINTS.keys())}")
+    if "frame" not in datos:
+        sys.exit(f"[ERROR] {archivo_puntos}: falta \"frame\" (el frame sobre el que se midieron los puntos).")
+    frame_idx = int(datos["frame"])
+    pixel_points = [[float(v) for v in p["px"]] for p in puntos_archivo]
+
+    medidas = completar_medidas(medidas)
+    cap = cv2.VideoCapture(str(video_path))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        sys.exit(f"[ERROR] No se pudo leer el frame {frame_idx} de: {video_path}")
+
+    print(f"\nCancha: {descripcion(medidas)}")
+    print(f"Puntos desde {archivo_puntos} (origen: {datos.get('origen', 'sin especificar')}), frame {frame_idx}")
+    origen = {
+        "tipo": datos.get("origen", "archivo"),
+        "archivo": str(archivo_puntos),
+        "descripcion": datos.get("descripcion"),
+        "metodo_por_punto": {p["nombre"]: p.get("metodo") for p in puntos_archivo},
+    }
+    return _guardar_calibracion(video_path, frame, frame_idx, point_names, pixel_points, medidas, origen)
+
+
+def _guardar_calibracion(video_path: Path, frame: np.ndarray, frame_idx: int, point_names: list,
+                         pixel_points: list, medidas: dict, origen: dict) -> Path:
+    """Homografía + residuos + control de calidad + .json, igual para clics o archivo.
+    `origen` queda en el .json ("origen_puntos"): de dónde salieron los píxeles."""
+    puntos = puntos_referencia(medidas)
     real_points = [puntos[name] for name in point_names]
 
     src = np.array(pixel_points, dtype=np.float32)
@@ -468,17 +757,17 @@ def calibrate(video_path: Path, point_names: list = None, frame_idx: int = 0,
     if H is None:
         sys.exit("[ERROR] No se pudo calcular la homografía. Revisá que los 4 puntos no sean colineales.")
 
-    # Residuo por punto: con más de 4 puntos, un clic mal hecho se nota como
-    # un residuo mucho mayor que el resto. (Esto NO mide la calidad de la
-    # calibración — mide si los clics son consistentes entre sí. La calidad
-    # la mide control_calidad(), lejos de estos puntos.)
+    # Residuo por punto: con más de 4 puntos, un punto mal marcado se nota
+    # como un residuo mucho mayor que el resto. (Esto NO mide la calidad de
+    # la calibración — mide si los puntos son consistentes entre sí. La
+    # calidad la mide control_calidad(), lejos de estos puntos.)
     if len(point_names) > 4:
         proy = cv2.perspectiveTransform(src.reshape(-1, 1, 2), H).reshape(-1, 2)
         residuos = np.linalg.norm(proy - dst, axis=1)
-        print("\nResiduo por punto clickeado (consistencia entre clics):")
+        print("\nResiduo por punto (consistencia entre puntos):")
         for name, r in zip(point_names, residuos):
-            aviso = "  ← ¿clic corrido? revisalo" if r > 1.0 else ""
-            print(f"   {name:<22} {r:5.2f} m{aviso}")
+            aviso = "  ← ¿punto corrido? revisalo" if r > 1.0 else ""
+            print(f"   {name:<26} {r:5.2f} m{aviso}")
 
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUTS / f"{video_path.stem}_homography.json"
@@ -493,8 +782,9 @@ def calibrate(video_path: Path, point_names: list = None, frame_idx: int = 0,
         "video": video_path.name,
         "frame": frame_idx,
         "point_names": point_names,
-        "pixel_points": pixel_points,
+        "pixel_points": [list(p) for p in pixel_points],
         "real_points": real_points,
+        "origen_puntos": origen,
         "homography_matrix": H.tolist(),
         CLAVE_ATTRS: medidas,
         "control_calidad": control,
@@ -649,6 +939,8 @@ Ejemplos:
   python src/homography/calibrate.py data/videos/partido.mp4 --verificar --frame 3000
 
   python src/homography/calibrate.py data/videos/partido.mp4 --estadio "Sportivo Belgrano"
+
+  python src/homography/calibrate.py data/videos/partido.mp4 --puntos-archivo data/calibracion/partido_puntos.json
         """,
     )
     parser.add_argument("video", type=str, help="Ruta al video .mp4 (para calibrar) o de referencia")
@@ -664,6 +956,9 @@ Ejemplos:
     parser.add_argument("--frame", type=int, default=None,
                          help="Frame sobre el cual calibrar (default: 0) o, con --verificar, sobre el "
                               "cual verificar (default: el frame con el que se calibró)")
+    parser.add_argument("--puntos-archivo", type=str, default=None,
+                         help="Calibrar con los puntos de este .json en vez de clics (ver "
+                              "calibrar_desde_archivo); el frame sale del archivo")
     parser.add_argument("--estadio", type=str, default=None,
                          help="Al calibrar: estadio cuyas medidas usar (ver scripts/estadios.py); queda "
                               "asignado al partido. Sin esto: el estadio ya asignado o, si no hay, 105×68")
@@ -673,6 +968,8 @@ Ejemplos:
     if args.estadio and (args.apply or args.verificar):
         sys.exit("[ERROR] --estadio va solo al calibrar: --apply y --verificar usan las medidas que "
                  "quedaron guardadas en la calibración. Para cambiarlas, recalibrá con --estadio.")
+    if args.puntos_archivo and (args.apply or args.verificar):
+        sys.exit("[ERROR] --puntos-archivo es para calibrar; no se combina con --apply ni --verificar.")
     if not video_path.exists():
         sys.exit(f"[ERROR] Video no encontrado: {video_path}")
 
@@ -698,4 +995,10 @@ Ejemplos:
                 sys.exit(f"[ERROR] Puntos no reconocidos: {invalid}\n"
                           f"  Opciones válidas: {list(REFERENCE_POINTS.keys())}")
         medidas = _medidas_para_calibrar(video_path.stem, args.estadio)
-        calibrate(video_path, point_names=point_names, frame_idx=args.frame or 0, medidas=medidas)
+        if args.puntos_archivo:
+            if point_names or args.frame is not None:
+                sys.exit("[ERROR] Con --puntos-archivo, los puntos y el frame salen del archivo: "
+                         "no combinar con --points ni --frame.")
+            calibrar_desde_archivo(video_path, Path(args.puntos_archivo), medidas)
+        else:
+            calibrate(video_path, point_names=point_names, frame_idx=args.frame or 0, medidas=medidas)

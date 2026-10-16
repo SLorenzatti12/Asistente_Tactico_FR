@@ -182,6 +182,49 @@ Si los números cambian sin haber tocado versiones ni el modelo, algo cambió en
 - Que el dashboard dibuje la cancha con las medidas del parquet (archivos de Nico, ver `docs/pendiente_nico_medidas_cancha.md`).
 - Las medidas reales de Sportivo, que se piden al club.
 
+## Calibración de `sportivo_crop3` desde puntos medidos y control que separa "no se ve" de "está corrida" (16/10/2026)
+
+**Clics vs puntos medidos.** En la zona lejana de esta cámara baja, 1 px de alto equivale a ~0.3 m, y la ventana de calibración muestra la imagen reducida.
+- Con clics la calibración salió con la línea media a 2.4 m y la banda cercana a 1.0 m.
+- Además, el punto `area_chica_inf_der` se clickeó en la esquina del *frente* del área chica: (1752,144) en vez de (1871,141).
+- **Decisión:** `calibrate.py --puntos-archivo <json>` calibra con puntos leídos de un archivo. El JSON de la calibración guarda `origen_puntos` (`clics_manuales` o el origen declarado en el archivo, p.ej. `ajuste_de_lineas`, con el método de cada punto). Sirve también para el futuro modo semiautomático.
+- La calibración vigente usa `data/calibracion/sportivo_crop3_puntos_f4500.json`: 9 puntos medidos al sub-píxel sobre el frame 4500. La de clics quedó en `sportivo_crop3_homography_clics.json`.
+
+**Medidas de Sportivo:**
+- 102×75 m, dato del club. El ancho de 75 m lo confirma la banda cercana, que no entra en el ajuste: queda a 0.11–0.19 m.
+- **El área grande derecha está pintada más chica que la reglamentaria:** ~15.0 m de profundidad y ~38.7 m de ancho. La izquierda da reglamentaria.
+- Por eso la calibración no usa los puntos de esa área. El control la muestra 1.5 m corrida, que es la diferencia de la pintura y no un error de la calibración.
+- Desde la imagen esto se confunde en parte con el largo: un largo de ~104.5 m explicaría casi lo mismo. Conviene medir con cinta la profundidad del área derecha.
+
+**Control de calidad: por qué cambió.** Antes buscaba la línea real más cercana en un radio fijo de 40 px. En la zona lejana eso son ~13 m: medía la banda lejana (tapada por los carteles) contra la base de los carteles con 7–12 m de "error", y las líneas tenues del lado izquierdo sumaban al "% sin línea cerca".
+
+**Cómo busca ahora:**
+- La línea real se busca como una cresta sobre la perpendicular a cada muestra proyectada, a ±4 m *en la cancha*.
+- La cresta tiene que estar sobre pasto de ambos lados y ser menos saturada que su entorno.
+- Una marca con la línea encontrada en menos del 30% de sus muestras queda **no verificada**: se informa y se dibuja en gris, pero no entra en el veredicto.
+- Hacen falta al menos 3 líneas verificadas para dar OK.
+
+**El riesgo y cómo se cubre:**
+- *Riesgo:* una marca proyectada a más de 4 m de la real tampoco "se encuentra", y quedaría como "no verificada" en vez de fallar. La primera versión daba OK a tres calibraciones que sabemos malas.
+- *Cubierto así:* si cerca no hay nada, se busca en una banda ancha (±15 m) una línea **casi paralela** (±35°: una calibración mala también rota las líneas; con los clics, la línea media proyectada quedaba girada ~20°).
+- Si esas muestras lejanas forman una línea continua (su distancia cambia suave entre muestras vecinas), la marca se ve pero está **corrida**, y el control falla.
+
+**Verificado sobre todas las calibraciones guardadas** (veredicto esperado = obtenido en las 7):
+
+| Calibración | Control viejo | Control nuevo | Por qué |
+|---|---|---|---|
+| `sportivo_crop3` (archivo, 9 pts) | revisar | **ok** (0.19 m; 4 líneas verificadas, 6 no se ven) | |
+| `sportivo_crop3` clics | revisar | **revisar** | banda cercana corrida 7.4 m, línea media 2.0 m |
+| `sportivo_crop3` calib vieja | revisar | **revisar** | banda cercana corrida 4.4 m |
+| `partido_clip2` | ok | **ok** (0.25 m; 7 líneas verificadas) | |
+| `partido_clip2` calib vieja | revisar | **revisar** | áreas corridas 5–14 m |
+| `partido_clip` | revisar | **revisar** | bandas corridas 6–9 m |
+| `sportivo_test_crop` | revisar | **revisar** | banda lejana corrida 10 m, error mediano 1.14 m |
+
+**Límite que queda:**
+- Lo que no se ve no se verifica. En `sportivo_crop3` el lado izquierdo queda sin verificar porque sus líneas son demasiado tenues para el detector. Ahí la evidencia es el ajuste de líneas a mano (0.10–0.17 m) y la imagen.
+- La regla sigue siendo control OK **y** mirar la imagen.
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.
