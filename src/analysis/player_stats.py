@@ -68,6 +68,12 @@ _VENTANA_POSICION = 5
 # ruido de detección, no un sprint.
 _VENTANA_SUAVIZADO = 5
 
+# Duración mínima (segundos vistos) para reportar velocidad_max de un track.
+# En un track corto el pico es casi todo ruido: en sportivo_crop3 un track de
+# 1.4 s en la banda lejana (donde 1 px de alto son ~0.3 m) daba 14.97 m/s
+# (54 km/h). Más cortos que esto → velocidad_max NaN ("no medida"), no 0.
+MIN_DURACION_VMAX_SEG = 5.0
+
 # Columnas que devuelve compute_player_stats, en orden.
 COLUMNAS_STATS = [
     "track_id",
@@ -286,12 +292,14 @@ def compute_player_stats(
         distancia_total_m    — suma de distancias entre posiciones consecutivas
         pos_promedio_x/y     — posición media sobre la cancha (metros)
         rango_x/y            — amplitud de movimiento (max - min) por eje
-        velocidad_max_ms     — velocidad máxima (m/s), suavizada con mediana móvil
+        velocidad_max_ms     — velocidad máxima (m/s), suavizada con mediana móvil;
+                               NaN si el track duró menos de MIN_DURACION_VMAX_SEG
         velocidad_prom_ms    — distancia total / tiempo en cancha (m/s)
 
     Casos borde:
         - DataFrame vacío o sin jugadores → DataFrame vacío con estas columnas.
-        - Track con una sola detección → distancia, rangos y velocidades en 0.0.
+        - Track con una sola detección → distancia, rangos y velocidad promedio en 0.0;
+          velocidad_max NaN (igual que todo track de menos de MIN_DURACION_VMAX_SEG).
         - Filas con NaN en field_x / field_y / time_sec → se ignoran.
 
     Args:
@@ -342,7 +350,7 @@ def compute_player_stats(
                 "pos_promedio_y": float(ys[0]),
                 "rango_x": 0.0,
                 "rango_y": 0.0,
-                "velocidad_max_ms": 0.0,
+                "velocidad_max_ms": np.nan,
                 "velocidad_prom_ms": 0.0,
             })
             continue
@@ -363,6 +371,8 @@ def compute_player_stats(
             velocidad_max = float(np.nanmax(suavizada.to_numpy()))
         else:
             velocidad_max = 0.0
+        if tiempo < MIN_DURACION_VMAX_SEG:
+            velocidad_max = np.nan
 
         velocidad_prom = distancia_total / tiempo if tiempo > 0 else 0.0
 
@@ -491,7 +501,8 @@ def _resumen(df_crudo: pd.DataFrame, df_limpio: pd.DataFrame, stats: pd.DataFram
         lineas.append(
             f"Distancia media por track: {stats['distancia_total_m'].mean():.1f} m  |  "
             f"pico de velocidad: {stats['velocidad_max_ms'].max():.2f} m/s "
-            f"({stats['velocidad_max_ms'].max() * 3.6:.1f} km/h)"
+            f"({stats['velocidad_max_ms'].max() * 3.6:.1f} km/h, solo tracks de "
+            f"≥{MIN_DURACION_VMAX_SEG:g} s)"
         )
     if "zona" in stats.columns and not stats.empty:
         conteo = stats["zona"].value_counts().reindex(ZONAS, fill_value=0)

@@ -29,13 +29,15 @@ puramente visual — el fallback en esos casos es asignación manual (una
 columna `team` cargada a mano).
 
 Aparte, y esto no es una limitación del método sino del tracking de
-entrada: en este dataset ByteTrack a veces reasigna un mismo track_id
-numérico a objetos de OTRA clase más adelante en el video (un jugador
-pierde el track y ese número reaparece después en un árbitro o la
-pelota). Por eso acá `team` se calcula fila por fila restringido a
-class_name en ("player", "goalkeeper") — nunca "por track_id en
-general" — para que una fila de árbitro/pelota no herede por error el
-equipo de un jugador que alguna vez compartió ese mismo número.
+entrada: un mismo track_id puede tener filas de clases distintas. Hasta
+el 16/10/2026 gran parte de eso era un bug de run_inference.py (nombres
+de clase desalineados con las cajas tras el tracking, ~0.7% de las
+filas); lo que queda es real: el detector etiqueta distinto a la misma
+persona según el frame, y en una oclusión el track puede saltar a otra
+persona (ByteTrack no distingue clases). Por eso acá `team` se calcula
+fila por fila restringido a class_name en ("player", "goalkeeper") —
+nunca "por track_id en general" — para que una fila de árbitro/pelota
+no herede por error el equipo de un jugador del mismo track.
 
 Uso por consola:
     python src/analysis/team_assignment.py data/videos/partido_clip2.mp4 \\
@@ -400,7 +402,7 @@ def _asignar_por_clustering(muestras: pd.DataFrame,
     return equipo_por_track, centros[[cluster_home, 1 - cluster_home]], orden_confiable
 
 
-def _tracks_arquero(df: pd.DataFrame) -> set[int]:
+def tracks_arquero(df: pd.DataFrame) -> set[int]:
     """Tracks cuyas filas de persona son mayormente `goalkeeper` (más de
     PROPORCION_MIN_ARQUERO). El resto de los tracks con alguna fila
     goalkeeper se tratan como jugadores de campo: equipo por color."""
@@ -412,7 +414,7 @@ def _tracks_arquero(df: pd.DataFrame) -> set[int]:
 
 
 def _asignar_arqueros(df: pd.DataFrame, equipo_por_track: dict[int, str],
-                      tracks_arquero: set[int] | None = None) -> dict[int, str]:
+                      ids_arquero: set[int] | None = None) -> dict[int, str]:
     """
     A los arqueros no se los mete en el clustering de color: su camiseta
     suele ser de un tercer color, distinto al de ambos equipos, y mezclarlos
@@ -427,17 +429,17 @@ def _asignar_arqueros(df: pd.DataFrame, equipo_por_track: dict[int, str],
     solo archivo esta heurística geométrica ya no vale, habría que partir
     el análisis por mitad.
 
-    Solo se aplica a `tracks_arquero` (default: _tracks_arquero(df), los
+    Solo se aplica a `ids_arquero` (default: tracks_arquero(df), los
     mayormente goalkeeper); su posición se promedia sobre sus filas
     goalkeeper.
     """
     equipo_por_track = dict(equipo_por_track)  # no mutar el dict del caller
-    if tracks_arquero is None:
-        tracks_arquero = _tracks_arquero(df)
+    if ids_arquero is None:
+        ids_arquero = tracks_arquero(df)
     if "field_x" not in df.columns or not equipo_por_track:
         return equipo_por_track
 
-    jugadores = df[df["track_id"].isin(set(equipo_por_track) - tracks_arquero)].copy()
+    jugadores = df[df["track_id"].isin(set(equipo_por_track) - ids_arquero)].copy()
     if jugadores.empty:
         return equipo_por_track
 
@@ -450,7 +452,7 @@ def _asignar_arqueros(df: pd.DataFrame, equipo_por_track: dict[int, str],
     equipo_ataca_x0 = x_prom_por_equipo.idxmax()
     punto_medio = (x_prom_por_equipo.min() + x_prom_por_equipo.max()) / 2
 
-    arqueros = df[(df["class_name"] == "goalkeeper") & df["track_id"].isin(tracks_arquero)]
+    arqueros = df[(df["class_name"] == "goalkeeper") & df["track_id"].isin(ids_arquero)]
     for track_id, sub in arqueros.groupby("track_id"):
         x_prom = sub["field_x"].mean()
         if pd.isna(x_prom):
@@ -542,23 +544,24 @@ def asignar_equipos(video_path, df: pd.DataFrame,
                                     & resultado["frame"].isin(frames_muestreados)]
         # Los arqueros quedan fuera del clustering aunque tengan filas
         # `player`: su camiseta es un tercer color y ensuciaría los 2 clusters.
-        tracks_arquero = _tracks_arquero(resultado)
-        detecciones = detecciones[~detecciones["track_id"].isin(tracks_arquero)]
+        ids_arquero = tracks_arquero(resultado)
+        detecciones = detecciones[~detecciones["track_id"].isin(ids_arquero)]
         muestras = _recolectar_muestras_color(cap, detecciones, pasto)
     finally:
         cap.release()
 
     equipo_por_track, centros_cluster, orden_confiable = _asignar_por_clustering(muestras, min_muestras_track)
     n_por_color = len(equipo_por_track)
-    equipo_por_track = _asignar_arqueros(resultado, equipo_por_track, tracks_arquero)
+    equipo_por_track = _asignar_arqueros(resultado, equipo_por_track, ids_arquero)
 
-    # OJO: ByteTrack no garantiza que un track_id sea siempre la misma clase
-    # a lo largo del video — en este dataset hay track_id que aparecen como
-    # "player" en algunos frames y como "referee"/"ball" en otros (identidad
-    # reasignada tras perder el track). Si se mapeara por track_id sobre TODO
-    # el DataFrame, esas filas de árbitro/pelota heredarían por error el
-    # equipo del jugador que alguna vez compartió ese mismo número — se
-    # restringe el mapeo a filas de persona (player/goalkeeper) a propósito.
+    # OJO: un track_id no es siempre la misma clase a lo largo del video
+    # (el detector etiqueta distinto a la misma persona según el frame, y en
+    # una oclusión el track puede saltar a otra persona — ver el docstring
+    # del módulo; hasta el 16/10/2026 se sumaba además un bug de
+    # run_inference.py). Si se mapeara por track_id sobre TODO el DataFrame,
+    # esas filas de árbitro/pelota heredarían por error el equipo del
+    # jugador del mismo track — se restringe el mapeo a filas de persona
+    # (player/goalkeeper) a propósito.
     es_persona = resultado["class_name"].isin(("player", "goalkeeper"))
     resultado["team"] = pd.Series(pd.NA, index=resultado.index, dtype=object)
     resultado.loc[es_persona, "team"] = resultado.loc[es_persona, "track_id"].map(equipo_por_track)
@@ -575,7 +578,7 @@ def asignar_equipos(video_path, df: pd.DataFrame,
         "n_sin_asignar": tracks_de_persona - (n_home + n_away),
         "n_muestras_validas": len(muestras),
         "n_por_color": n_por_color,
-        "n_arqueros_por_geometria": len(set(equipo_por_track) & tracks_arquero),
+        "n_arqueros_por_geometria": len(set(equipo_por_track) & ids_arquero),
         "colores_cluster_rgb": [tuple(int(round(c)) for c in centro) for centro in centros_cluster],
         "orden_etiquetas_confiable": orden_confiable,
         # None si se usó el rango fijo (pasto_adaptativo=False o no se pudo estimar)

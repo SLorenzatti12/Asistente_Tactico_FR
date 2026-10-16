@@ -77,15 +77,17 @@ cuando se agregue Auth — ver el pendiente correspondiente en
 
 **Efecto medido:** con la misma imagen, el detector nuevo devuelve cajas que difieren hasta ~1 px y confianzas hasta ~0.004 (cambio interno de `inference-models`). ByteTrack amplifica esas diferencias en los IDs. Se verificó que **ByteTrack en sí no cambió**: pasando las mismas detecciones por `supervision` 0.29.1 y 0.30.7, las asignaciones de ID son idénticas fila por fila. Se consideró ruido del tracker, no regresión.
 
-**Línea base de regresión vigente** — `sportivo_min.mp4 --skip 1`, versiones de `requirements.txt`:
+**Línea base de regresión vigente (desde el 16/10/2026)** — `sportivo_min.mp4 --skip 1`, versiones de `requirements.txt`, con el arreglo del bug de clases de `run_inference.py`:
 
 | Métrica | Valor |
 |---|---|
-| IDs únicos (todas las clases menos `ball`) | 133 |
-| Detecciones | 30.593 (player 28.694 · goalkeeper 1.745 · referee 88 · ball 66) |
-| Tracks `player`+`goalkeeper` >500 / 100-500 / <100 frames | 21 / 26 / 79 |
+| IDs únicos (todas las clases menos `ball`) | 131 |
+| Detecciones | 30.593 (player 28.712 · goalkeeper 1.781 · referee 77 · ball 23) |
+| Tracks `player`+`goalkeeper` >500 / 100-500 / <100 frames | 21 / 26 / 77 |
 
-Línea base anterior (inference 1.4.1, para referencia): 130 IDs · 30.590 detecciones · 23 / 19 / 81.
+Líneas base anteriores, para referencia:
+- **13/10/2026:** 133 IDs · player 28.694 · goalkeeper 1.745 · referee 88 · ball 66 · 21 / 26 / 79. **Reflejaba el bug de clases**: las mismas cajas y los mismos IDs, pero ~0.7% de las filas con la clase equivocada (43 jugadores contados como pelota). Por eso cambian los IDs sin pelota y los tracks cortos, aunque el tracking es idéntico. Ver "Bug de clases en `run_inference.py`".
+- **inference 1.4.1:** 130 IDs · 30.590 detecciones · 23 / 19 / 81.
 
 **Cómo reproducirla** (los criterios de conteo importan — IDs sin `ball`, distribución solo sobre `player`+`goalkeeper`):
 ```
@@ -126,7 +128,7 @@ Si los números cambian sin haber tocado versiones ni el modelo, algo cambió en
 
 **Decisión:** criterio fijo, **`home` = el equipo de camiseta más clara** (mayor luminancia del color del cluster). Es arbitrario y no tiene por qué coincidir con el local real, pero es el mismo en todas las corridas sobre el mismo video. Si las dos camisetas tienen luminancia parecida (diferencia < 20 en 0–255), queda `orden_etiquetas_confiable = False` en `.attrs["equipos_info"]` y el CLI lo avisa.
 
-**Verificado sobre `partido_clip2`:** con la calibración vieja, con la nueva y con 20/30/45/60 frames muestreados, las etiquetas son las mismas, y dos corridas del CLI dan resultados idénticos track por track. La única diferencia es el track 33 con 60 frames, que cambia de *grupo* (no de etiqueta): es el track con identidad mezclada entre clases que ya se conocía.
+**Verificado sobre `partido_clip2`:** con la calibración vieja, con la nueva y con 20/30/45/60 frames muestreados, las etiquetas son las mismas, y dos corridas del CLI dan resultados idénticos track por track. La única diferencia es el track 33 con 60 frames, que cambia de *grupo* (no de etiqueta): es el track con identidad mezclada entre clases que ya se conocía (parte de esa mezcla era el bug de clases de `run_inference.py`, ver "Bug de clases en `run_inference.py`" más abajo).
 
 **Límite:** con dos camisetas de luminancia parecida (por ejemplo, un rojo y un azul oscuros), el orden puede volver a ser frágil. Por eso se avisa en lugar de decidir en silencio.
 
@@ -224,6 +226,66 @@ Si los números cambian sin haber tocado versiones ni el modelo, algo cambió en
 **Límite que queda:**
 - Lo que no se ve no se verifica. En `sportivo_crop3` el lado izquierdo queda sin verificar porque sus líneas son demasiado tenues para el detector. Ahí la evidencia es el ajuste de líneas a mano (0.10–0.17 m) y la imagen.
 - La regla sigue siendo control OK **y** mirar la imagen.
+
+## Primer partido completo con calibración validada: ajustes posteriores (16/10/2026)
+
+**Arqueros fuera de los patrones.** En `sportivo_crop3`, `tactical_patterns` reportó "no achica" sobre el arquero de Crecer: 562 de sus 886 filas eran `goalkeeper` y 311 `player` (confusiones del detector), y esas filas entraban en la línea defensiva. `asignar_lineas` ahora excluye los tracks mayormente `goalkeeper`, con el mismo criterio que `team_assignment` (`tracks_arquero`). Queda 1 patrón en el partido, el del track 626.
+
+**`velocidad_max` solo en tracks de ≥5 s** (`MIN_DURACION_VMAX_SEG`). Los más cortos dan NaN, no 0. Un track de 1.4 s en la banda lejana reportaba 54 km/h.
+- **Limitación conocida, no se ataca por ahora:** en tracks largos siguen apareciendo máximos de 10–12 m/s (36–43 km/h), poco creíbles en fútbol amateur. Es ruido de profundidad en la banda lejana: con cámara baja, 1 px de alto ahí son ~0.3 m, y un temblor de la caja de 2–3 px entre frames parece un pique. La duración mínima no lo resuelve. Hasta resolverlo, la velocidad máxima de jugadores lejos de la cámara es orientativa.
+
+**`lost_track_buffer` de ByteTrack: probado, queda en 30.**
+- **Cómo se midió:** detector corrido una sola vez sobre `sportivo_min.mp4 --skip 1`, re-trackeado offline con cada configuración. Con la configuración actual reproduce exacta la línea base de ese momento (133 IDs, 21/26/79, todavía con el bug de clases; la tabla es con ese código).
+- **Cómo se calcula el buffer:** `max_time_lost = int(frame_rate/30 × lost_track_buffer)`, y cuenta frames *procesados* (con `--skip 3`, cada frame procesado son 3 del video).
+
+| Buffer efectivo | IDs | Tracks >500 / 100–500 / <100 |
+|---|---|---|
+| 30 frames (actual) | 133 | 21 / 26 / 79 |
+| 75 (`lost_track_buffer=90`, `frame_rate=25`) | 124 | 21 / 26 / 72 |
+| 90 | 123 | 21 / 26 / 72 |
+| 125 | 122 | 21 / 26 / 71 |
+
+- Solo se unen tracks cortos; los largos no aumentan.
+- Las 18 reconexiones del buffer de 90, revisadas a ojo, son casi todas jugadores de blanco quietos en un amontonamiento, con saltos de 0–17 px. No se ven uniones entre equipos distintos, pero entre jugadores iguales apiñados la identidad no se puede confirmar a ojo.
+- Procesar con `--skip 3` tampoco fragmenta más en este video: 104 IDs y 25 tracks de más de 20 s, contra 131 y 22 con skip 1.
+- La fragmentación de `sportivo_crop3` (~105 tracks/min) es la misma que la de `sportivo_min`: viene de oclusiones, salidas de cuadro y detecciones perdidas, no del buffer.
+- **Conclusión:** la fragmentación viene de oclusiones (amontonamientos, pelota parada) y de jugadores que salen y vuelven a entrar al cuadro. Para resolverla hace falta reconocer al jugador por su apariencia al reaparecer (re-identificación), no esperar más tiempo con el mismo ID. Queda fuera del alcance del MVP. Mientras tanto las métricas son "por track", y `tactical_patterns` solo señala candidatos a fusión sin fusionarlos.
+- `sv.ByteTrack` está deprecado desde supervision 0.28 y se elimina en 0.31: no actualizar sin reemplazarlo.
+
+**Bug de clases en `run_inference.py` (corregido el 16/10/2026):**
+- **Qué pasaba:** la lista `class_names` se armaba antes del tracking, pero `update_with_detections` devuelve solo las detecciones que logra asociar. Cuando descartaba alguna, los nombres quedaban desalineados con las cajas: 0.7% de las filas en `sportivo_min`.
+- **Arreglo:** la clase se lee de `detections.data["class_name"]` después del tracking.
+- **Efecto en `sportivo_min`:** los tracks con más de una clase bajan de 44 a 14, y las filas "pelota" de 66 a 23 (43 eran jugadores).
+- **Lo que llamábamos "ByteTrack recicla IDs entre clases" era en buena parte esto.** ByteTrack nunca reutiliza un número. Lo que queda es real pero menor: el detector etiqueta distinto a la misma persona según el frame (sobre todo arquero/jugador), y en una oclusión un track puede saltar a otra persona.
+- La línea base de regresión cambió por esto (ver "Versiones fijadas…" arriba). Los parquets generados antes de esta fecha (`partido_clip2`, `partido_clip`, etc.) siguen teniendo el bug hasta que se reprocesen.
+
+## Validación de `tactical_patterns` contra video (casos revisados)
+
+Cada caso que alguien revisa contra el video queda acá: es la única evidencia que tenemos de si los patrones dicen algo útil. Los umbrales se recalibran con varios casos, no con uno.
+
+| Video | Track / patrón | Lo que dijo el sistema | Lectura humana | Consecuencia |
+|---|---|---|---|---|
+| `partido_clip2` (Mundial 2026, Noruega–Francia, cámara de transmisión) | track 8 o 17 (falta registrar cuál es cuál): jugador que se abre para recibir un pase — `desconectado` | severidad **1.00**, desviación sostenida (proporción 0.58) | **falso positivo** (DT): se despega por un motivo tácticamente correcto | `PROPORCION_MIN_DESCONEXION` = 0.70 |
+| ídem | track 8 o 17: jugador que hace marca personal — `desconectado` | severidad **1.00**, desviación sostenida (proporción 0.59) | **falso positivo** (DT): ídem | ídem |
+| ídem | track 21/74 (la misma persona en dos tracks: 21 → 74, se solapan 0.30 s a 13 cm) — `no_achica` | con los umbrales de entonces (bastaban 2 subidas en el clip): track 21, severidad **1.00**, déficit en **1 de 4** subidas, valor técnico 17.8; su continuación, track 74, severidad 0.54, **1 de 1**, valor técnico 4.3. Evidencia de los dos: 0:30.2–0:40.1 | **falso positivo** (revisado contra el video): seguía la basculación normal del equipo, no era una falla del jugador | `MIN_FASES_ATAQUE` de 2 a 4 y `PROPORCION_MIN_NO_ACHICA` = 0.5 estricto (hacen falta al menos 3 de 4 subidas). Además fue el caso que calibró `MAX_SOLAPAMIENTO_FUSION_SEG` para los candidatos a fusión |
+| `sportivo_crop3` (Sportivo–Crecer, cámara fija nocturna, calibración validada) | track 626 (home), banda cercana cerca de la mitad de cancha — `desconectado` | severidad **1.00** ("tendencia marcada"), 81% del tiempo en cancha, evidencia 4:48.7–5:24.7 | **desvío real pero leve, aceptable** (revisado por Santi, 16/10/2026) | ninguna todavía (ver abajo) |
+
+**Patrón en los casos revisados: la severidad máxima no predice nada.** Los 4 casos revisados con severidad 1.00 (tracks 8, 17 y 21 de `partido_clip2`; 626 de `sportivo_crop3`) resultaron 3 falsos positivos y 1 desvío leve. Ninguno fue una "tendencia marcada" como dice el texto que ve el DT.
+
+**Lo que muestra el caso de Sportivo:**
+- Es el primer acierto en la dirección del patrón: el desvío existe.
+- Pero la **severidad sobrestima**: el sistema dice "tendencia marcada" con severidad máxima, y la lectura humana es leve.
+- La severidad satura en 1.0 con duplicar la distancia típica de la línea (`UMBRAL_SEVERIDAD_MAX_DESCONEXION`). Para un jugador de banda, en una línea que se estira a lo ancho, eso puede ser poco.
+- **Con un solo caso no se recalibra.** Queda como evidencia para cuando haya más casos revisados con lectura humana de la intensidad, no solo de si es real o falso.
+
+**El caso 626 no se reproduce después del arreglo del bug de clases.** Con el reproceso, el mismo jugador pasa a ser el track 587:
+- Empieza 16 s antes (4:32.3–5:24.7) y tiene 430 filas en vez de 307.
+- Su línea mayoritaria pasó de **ataque** a **mediocampo**.
+- Contra la referencia de mediocampo se despega 1.30 veces (antes 2.11 contra la de ataque), por debajo del umbral de 1.50, así que ya no se reporta.
+- En su lugar aparece otro caso, el track 2374 (home, `desconectado`, 21:07.0–21:45.7), todavía sin revisar contra el video.
+- **Lectura:** el patrón depende de en qué línea queda clasificado el jugador, y eso cambia con detalles del tracking (dónde empieza el track, qué filas cuentan). Es otra razón para presentar los casos como momentos para revisar y no como un diagnóstico del jugador.
+
+**Para reproducir el caso 626 original:** la numeración de tracks corresponde al procesamiento anterior al arreglo del bug de clases. Usar `sportivo_crop3_coords_field_bug_clase.parquet` y `sportivo_crop3_tracked_bug_clase.mp4` en `data/outputs/`. En el reproceso los números de track cambian.
 
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 

@@ -114,9 +114,14 @@ al correr sobre datos de verdad.
 Estas no son tareas pendientes por olvido. Son decisiones tomadas con motivo documentado.
 
 **El tracking fragmenta identidades.** Un mismo jugador puede aparecer bajo varios
-`track_id` (ByteTrack pierde el track tras una oclusión y asigna uno nuevo). Además
-**recicla IDs entre clases distintas**: el mismo número puede ser `player` en unos frames
-y `referee` en otros. Por eso las métricas son "por track", no "por jugador", y la
+`track_id` (ByteTrack pierde el track tras una oclusión y asigna uno nuevo). Un mismo
+`track_id` también puede tener filas de clases distintas (`player` en unos frames,
+`goalkeeper` o `referee` en otros). Antes atribuíamos eso a que ByteTrack "reciclaba IDs
+entre clases"; en realidad gran parte era un bug nuestro en `run_inference.py`, corregido
+el 16/10/2026: los nombres de clase quedaban desalineados con las cajas. ByteTrack nunca
+reutiliza un número. Lo que queda es real pero menor: el detector etiqueta distinto a la
+misma persona según el frame (sobre todo arquero/jugador), y en oclusiones un track puede
+saltar a otra persona (el tracker no distingue clases). Por eso las métricas son "por track", no "por jugador", y la
 distancia recorrida es un piso, no el total real. `tactical_patterns.py` detecta
 candidatos a fusión pero **no fusiona automáticamente** — una fusión errónea contamina
 dos jugadores en silencio; no fusionar deja el problema visible.

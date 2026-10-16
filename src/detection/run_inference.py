@@ -191,6 +191,12 @@ def run(video_path: Path, frame_skip: int = 2, api_key: str = None) -> Path:
 
             # ── Tracking (ByteTrack, vía supervision) ──────
             detections = tracker.update_with_detections(detections)
+            # La clase se lee de las detecciones QUE DEVUELVE el tracker: ByteTrack
+            # descarta las que no logra asociar, así que la lista de arriba ya no
+            # está alineada con estas cajas. Usarla etiquetaba mal ~0.7% de las
+            # filas (jugadores como "ball"/"referee") — ver decisiones.md.
+            if "class_name" in detections.data:
+                class_names = list(detections.data["class_name"])
 
             # ── Dibujar anotación ───────────────────────────
             annotated = frame.copy()

@@ -135,6 +135,10 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 from src.analysis.player_stats import MAX_SPEED_MS  # noqa: E402
+# Mismo criterio de "quién es arquero" que la asignación de equipos: un track
+# es arquero si la MAYORÍA de sus filas son `goalkeeper` (el detector confunde
+# jugador/arquero en detecciones sueltas).
+from src.analysis.team_assignment import tracks_arquero  # noqa: E402
 
 # ── Fases de juego ───────────────────────────────────────────
 # Ventana por defecto para medir la tendencia del centroide (segundos).
@@ -566,7 +570,11 @@ def asignar_lineas(df: pd.DataFrame) -> pd.DataFrame:
 
     Los arqueros quedan afuera de esta clasificación a propósito (no son
     una "línea" en este esquema); sus filas quedan con línea NaN, igual
-    que árbitro y pelota.
+    que árbitro y pelota. "Arquero" es el TRACK mayormente `goalkeeper`
+    (team_assignment.tracks_arquero), no la fila: en sportivo_crop3 el
+    arquero de Crecer tenía 311 de sus 886 filas como `player`, y esas filas
+    entraban en la línea defensiva — salía reportado "no achica" por no
+    acompañar las subidas, que es justamente lo que hace un arquero.
 
     Args:
         df: detecciones con frame, track_id, class_name, team, field_x.
@@ -595,6 +603,7 @@ def asignar_lineas(df: pd.DataFrame) -> pd.DataFrame:
         (resultado["class_name"] == "player")
         & resultado["team"].notna()
         & resultado["team"].isin(direccion.keys())
+        & ~resultado["track_id"].isin(tracks_arquero(resultado))
     ]
     if jugadores.empty:
         return resultado
