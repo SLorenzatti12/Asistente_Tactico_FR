@@ -6,7 +6,7 @@
 
 Los clubes regionales filman sus partidos con dos cámaras fijas de fondo (Norte y Sur), en perspectiva diagonal. El sistema:
 1. Detecta y sigue a los jugadores en video.
-2. Unifica las dos perspectivas en un único plano métrico 2D (origen en el centro de la cancha) mediante doble homografía.
+2. Unifica las dos perspectivas en un único plano métrico 2D (origen (0,0) en la esquina superior izquierda de la cancha) mediante doble homografía.
 3. Calcula métricas tácticas cuantitativas (compacidad del bloque) sobre ese plano.
 4. Permite etiquetar eventos clave (salidas, presión, pelota parada) y exportar clips de 10 s con un click.
 

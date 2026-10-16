@@ -51,8 +51,11 @@ python scripts/download_video.py "<url>" --start 00:05:00 --duration 00:10:00
 export ROBOFLOW_API_KEY="..."
 python src/detection/run_inference.py data/videos/<clip>.mp4
 
-# 2. Homografía: calibrar (una vez por cámara/ángulo) y aplicar
-python src/homography/calibrate.py data/videos/<clip>.mp4
+# 2. Homografía: calibrar (una vez por cámara/ángulo) y aplicar.
+#    Las medidas de la cancha son por estadio (default 105×68): cargarlo una vez
+#    y pasarlo al calibrar — quedan copiadas en la calibración y en el parquet.
+python scripts/estadios.py alta "<estadio>" --largo <m> --ancho <m>
+python src/homography/calibrate.py data/videos/<clip>.mp4 --estadio "<estadio>"
 python src/homography/calibrate.py data/videos/<clip>.mp4 --apply data/outputs/<clip>_coords.parquet
 ```
 
@@ -79,8 +82,8 @@ python scripts/sync_to_cloud.py <match_name>
 Etapas independientes que se corren por CLI, no importadas por el dashboard en tiempo real (ver comandos arriba):
 
 - `src/detection/run_inference.py` — modelo propio en Roboflow (RF-DETR Small, `player`/`goalkeeper`/`referee`/`ball`) vía paquete `inference`, tracking con `supervision.ByteTrack()`. Exporta video anotado + `*_coords.parquet`.
-- `src/homography/calibrate.py` — calibración manual de 4 puntos por cámara; transforma píxeles a metros reales (cancha 105×68 m, origen en el centro). Exporta `*_coords_field.parquet`, el formato que consume todo lo demás.
-- `src/analysis/team_assignment.py` — infiere equipo (`home`/`away`) por color de camiseta (KMeans sobre el torso).
+- `src/homography/calibrate.py` — calibración manual de 4 puntos por cámara; transforma píxeles a metros reales (origen (0,0) en la esquina superior izquierda: `field_x` 0–largo arco a arco, `field_y` 0–ancho lateral a lateral). Las medidas de la cancha salen del estadio (`--estadio`, default 105×68 reglamentaria), se copian al JSON de la calibración y viajan en el parquet como `df.attrs["medidas_cancha"]` — leerlas con `medidas_de_df()` de `src/homography/medidas_cancha.py`. Exporta `*_coords_field.parquet`, el formato que consume todo lo demás.
+- `src/analysis/team_assignment.py` — infiere equipo (`home`/`away`) por color de camiseta (KMeans sobre el torso), con muestras por track y el pasto estimado del propio video; los tracks mayormente `goalkeeper` van por geometría.
 - `src/analysis/tactical_patterns.py` — fases de bloque (avanza/repliega) y líneas por jugador. Sin detección de posesión confiable (recall bajo de la clase `ball`) — no confundir "fase" con ataque/defensa por posesión.
 - `src/analysis/player_stats.py` — estadísticas por `track_id` a partir del parquet en metros.
 
@@ -93,6 +96,7 @@ SQLite local (`data/db/analizador.sqlite`) es la única base durante el procesam
 Piezas locales (`src/db/`), cada una dueña de su propia tabla en el mismo archivo SQLite:
 
 - `team_repo.py` — equipos/categorías (soporta más de un plantel, ej. Primera/Reserva) y qué equipo jugó cada partido (`match_team`).
+- `estadio_repo.py` — estadios con las medidas de su cancha (`estadios`) y en cuál se jugó cada partido (`match_estadio`). Alta/listado/asignación con `scripts/estadios.py`; lo consume `calibrate.py --estadio`.
 - `roster_repo.py` — plantel de jugadores **por equipo**, cargado una sola vez y reutilizado en todos sus partidos (no por partido). Baja = `DELETE` físico, a propósito (no hay soft delete).
 - `video_repo.py` — ruta local del video crudo de cada partido, y si ya se subió.
 - `local.py` — helpers de solo-lectura sobre `events`/`semaforo` (tablas de `tagging.py`) para el sync.

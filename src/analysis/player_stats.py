@@ -551,8 +551,15 @@ Ejemplos:
         except ValueError as e:
             sys.exit(f"[ERROR] {e}")
 
+    # Tercios sobre el largo REAL de la cancha (metadata que deja calibrate.py
+    # --apply; sin ella, 105 m — ver src/homography/medidas_cancha.py).
+    _ROOT = Path(__file__).resolve().parents[2]
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    from src.homography.medidas_cancha import medidas_de_df
     stats = infer_formation_zones(
-        compute_player_stats(df_limpio, ventana_suavizado=args.suavizado)
+        compute_player_stats(df_limpio, ventana_suavizado=args.suavizado),
+        largo_cancha=medidas_de_df(df_crudo)["largo"],
     )
 
     print(f"\n📊 Estadísticas por jugador — {ruta_parquet.name}")

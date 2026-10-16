@@ -130,6 +130,58 @@ Si los números cambian sin haber tocado versiones ni el modelo, algo cambió en
 
 **Límite:** con dos camisetas de luminancia parecida (por ejemplo, un rojo y un azul oscuros), el orden puede volver a ser frágil. Por eso se avisa en lugar de decidir en silencio.
 
+## `team_assignment`: muestreo por track y pasto estimado del video (15/10/2026)
+
+**Problema (`sportivo_crop3`, primer video nocturno con luz amarilla):**
+- **Cobertura.** El video dura 26 min y tiene 2.819 tracks de jugador, con una mediana de 15 frames. Con 30 frames uniformes (uno cada ~55 s), solo 47 tracks recibían equipo por color.
+- **Pasto.** El pasto nocturno tiene matiz 33–37, justo en el corte del filtro fijo (H ≥ 35). Además, en recortes de torso de ~5×10 px casi todo píxel mezcla camiseta y pasto. Solo se descartaba como pasto el 13% del recorte, y los dos colores de equipo salían verdosos. El filtro de sombra no tenía nada que ver: descartaba 0%.
+
+**Decisión:**
+- **Muestreo por track** (hasta 5 muestras repartidas en la vida de cada track, sobre una grilla de 1 frame cada 5, leídas en orden con `grab()`). El modo anterior queda como `--n-muestras N`.
+- **Rango de pasto estimado del propio video:** fondo fuera de las detecciones, pico de matiz, y mediana ± 5 desvíos robustos (MAD) en matiz y en saturación mínima. El rango fijo queda como `--pasto-fijo` y como fallback.
+- Se usan mediana y MAD, no percentiles, porque tribuna, carteles y pista entran en las colas de la distribución. Con percentiles, la saturación mínima caía a ~55 y el filtro "de pasto" se comía las camisetas blancas.
+
+**Verificado** — coincidencia de cada track consigo mismo, sobre los mismos tracks con ≥3 muestras en todas las variantes:
+
+| Video | Variante | Acuerdo medio | Tracks ≥90% en un solo cluster |
+|---|---|---|---|
+| `sportivo_crop3` (1.086 tracks) | pasto fijo | 0.851 | 50% |
+| | pasto estimado | 0.899 | 65% |
+| `partido_clip2` (31 tracks) | pasto fijo | 0.923 | 74% |
+| | pasto estimado | 0.929 | 77% |
+
+- En `sportivo_crop3`, las filas de jugador/arquero con equipo pasan de 70% a 93%.
+- En `partido_clip2`, las etiquetas son idénticas a las anteriores salvo el track 33 (el de identidad mezclada ya conocido).
+- Rangos estimados: `sportivo_crop3` H 26–46, S ≥ 78; `partido_clip2` H 31–51, S ≥ 66.
+- Tiempo: ~20 s el video de 26 min.
+
+**Límites:**
+- Con el pasto más estricto, en `sportivo_crop3` quedan menos muestras válidas por recorte: 1.303 tracks con voto en vez de 1.606. Se prefiere voto más limpio a más votos.
+- El azul de Crecer sigue mezclado con pasto en el color representativo: con jugadores de ~30 px, la mezcla de píxeles no se resuelve filtrando.
+- **Arqueros (resuelto el 16/10/2026).** `_asignar_arqueros` asignaba por geometría (mitad de cancha) a todo track con alguna fila `goalkeeper`, aunque fuera casi siempre `player`. En `sportivo_crop3` eran 785 tracks que recibían equipo por posición y no por color.
+  - Ahora es arquero solo el track con **más de la mitad** de sus filas `goalkeeper` (`PROPORCION_MIN_ARQUERO`). Esos tracks van por geometría y quedan **fuera** del clustering de color, porque su camiseta es un tercer color. El resto va por color.
+  - En `sportivo_crop3` quedan 62 tracks arquero. De los otros 723: 475 reciben equipo por color y 248 quedan sin asignar por falta de muestras válidas, en vez de recibir uno por posición.
+  - La consistencia del color no cambia (0.899 / 65% en `sportivo_crop3`, 0.940 / 80% en `partido_clip2`): el arreglo cambia de dónde sale la etiqueta, no el clustering.
+  - **Verificado a ojo** sobre 40 de los 207 tracks de `sportivo_crop3` que cambiaron de etiqueta: ~29 quedan bien (blanco → `home`, azul → `away`), ~3 mal y ~8 son ambiguos (identidad mezclada, gente fuera de la cancha). Con la regla geométrica, alrededor de la mitad estaba mal.
+  - En `partido_clip2` cambian 4 tracks: 2 se corrigen, 1 empeora (un blanco pasa a `away`, con un jugador rojo pegado en el recorte) y 1 es dudoso.
+
+## Medidas de cancha por estadio (16/10/2026)
+
+**Por qué:** las canchas regionales no miden 105×68 ni respetan siempre las marcas.
+- En `sportivo_crop3`, el lado izquierdo, el círculo y la banda cercana cierran a 0.5 px solo con una cancha de ~79 m de ancho.
+- El área chica derecha parece medir ~6.2 m de profundidad.
+- Con 105×68 fijo en el código, ninguna combinación de puntos de ese video llega a OK, y el filtro "fuera de cancha" descarta jugadores reales cerca de la banda.
+
+**Decisión:**
+- Las medidas son un atributo del **estadio**, no del partido ni del equipo (un equipo juega de visitante en otras canchas; Primera y Reserva comparten estadio). Tablas `estadios` y `match_estadio` en `src/db/estadio_repo.py`; alta y asignación con `scripts/estadios.py`. Las marcas no cargadas valen las reglamentarias.
+- `calibrate.py --estadio` **copia** las medidas al JSON de la calibración. Es una copia y no una referencia: si después se corrige el estadio, las coordenadas ya generadas siguen siendo coherentes con la calibración que las produjo. `--apply` avisa si el estadio asignado hoy no coincide.
+- `--apply` filtra "fuera de cancha" con esas medidas y las deja en el parquet como `df.attrs["medidas_cancha"]`, que pandas conserva al leer y escribir. Sin columnas nuevas, así que el contrato del parquet no cambia. Se leen con `medidas_de_df()` (`src/homography/medidas_cancha.py`).
+- Sin dato (JSON o parquet anteriores a esto) se asume 105×68: lo existente sigue funcionando igual. Verificado en `partido_clip2`: mismo control (OK 0.21/0.82 m) y coordenadas idénticas fila por fila.
+
+**Pendiente:**
+- Que el dashboard dibuje la cancha con las medidas del parquet (archivos de Nico, ver `docs/pendiente_nico_medidas_cancha.md`).
+- Las medidas reales de Sportivo, que se piden al club.
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.

@@ -13,8 +13,10 @@ Flujo:
        se puede transformar a metros usando esa matriz
 
 Uso:
-    # Paso 1: calibrar (una vez por video/ángulo de cámara)
-    python src/homography/calibrate.py data/videos/partido.mp4
+    # Paso 1: calibrar (una vez por video/ángulo de cámara). Con --estadio se
+    # usan las medidas reales de esa cancha (ver scripts/estadios.py); sin él,
+    # las del estadio ya asignado al partido o, si no hay, 105×68.
+    python src/homography/calibrate.py data/videos/partido.mp4 --estadio "Sportivo Belgrano"
 
     # Con puntos custom (cuando no se ven las 4 esquinas completas)
     python src/homography/calibrate.py data/videos/partido.mp4 \
@@ -50,10 +52,17 @@ import pandas as pd
 
 ROOT    = Path(__file__).resolve().parents[2]
 OUTPUTS = ROOT / "data" / "outputs"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from src.homography.medidas_cancha import (  # noqa: E402
+    CLAVE_ATTRS, MEDIDAS_REGLAMENTARIAS, completar_medidas, descripcion, offset_medialuna,
+)
 
-# ── Dimensiones estándar de cancha (metros) ────────────────
-FIELD_LENGTH = 105.0
-FIELD_WIDTH  = 68.0
+# ── Dimensiones de cancha (metros) ─────────────────────────
+# Las reales vienen del estadio (ver medidas_cancha.py); estas son las
+# reglamentarias, que se usan cuando no hay estadio asignado.
+FIELD_LENGTH = MEDIDAS_REGLAMENTARIAS["largo"]
+FIELD_WIDTH  = MEDIDAS_REGLAMENTARIAS["ancho"]
 
 # Margen de tolerancia (metros) al filtrar detecciones fuera de la cancha.
 # Más chico = más estricto (filtra mejor banco/DTs/árbitros cerca de la línea,
@@ -62,39 +71,51 @@ FIELD_WIDTH  = 68.0
 OUT_OF_BOUNDS_MARGIN = 1.5
 
 # Puntos de referencia disponibles para calibrar — el usuario elige
-# cuáles 4 puede ver claramente en su video (no siempre se ve la cancha entera)
-REFERENCE_POINTS = {
-    "esquina_sup_izq":      (0.0, 0.0),
-    "esquina_sup_der":      (FIELD_LENGTH, 0.0),
-    "esquina_inf_izq":      (0.0, FIELD_WIDTH),
-    "esquina_inf_der":      (FIELD_LENGTH, FIELD_WIDTH),
-    "penal_izq":            (11.0, FIELD_WIDTH / 2),
-    "penal_der":            (FIELD_LENGTH - 11.0, FIELD_WIDTH / 2),
-    "area_chica_sup_izq":   (0.0, FIELD_WIDTH / 2 - 9.16),
-    "area_chica_inf_izq":   (0.0, FIELD_WIDTH / 2 + 9.16),
-    "area_grande_sup_izq":  (0.0, FIELD_WIDTH / 2 - 20.16),
-    "area_grande_inf_izq":  (0.0, FIELD_WIDTH / 2 + 20.16),
-    # Lado derecho (arco derecho) — para cámaras que solo ven la mitad de cancha
-    "area_chica_sup_der":   (FIELD_LENGTH, FIELD_WIDTH / 2 - 9.16),
-    "area_chica_inf_der":   (FIELD_LENGTH, FIELD_WIDTH / 2 + 9.16),
-    "area_grande_sup_der":  (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2 - 20.16),
-    "area_grande_inf_der":  (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2 + 20.16),
-    "area_grande_borde_der": (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2),
-    "centro_cancha":        (FIELD_LENGTH / 2, FIELD_WIDTH / 2),
-    "mitad_linea_sup":      (FIELD_LENGTH / 2, 0.0),
-    "mitad_linea_inf":      (FIELD_LENGTH / 2, FIELD_WIDTH),
-    # Cruces de la línea media con el círculo central (radio 9.15 m): puntos
-    # nítidos y casi siempre visibles en planos de transmisión.
-    "circulo_mitad_sup":    (FIELD_LENGTH / 2, FIELD_WIDTH / 2 - 9.15),
-    "circulo_mitad_inf":    (FIELD_LENGTH / 2, FIELD_WIDTH / 2 + 9.15),
-    # Donde el arco del área (radio 9.15 m desde el punto penal, a 11 m del
-    # arco) corta la línea del frente del área (a 16.5 m): 5.5 m de distancia
-    # horizontal → ± sqrt(9.15² - 5.5²) ≈ ±7.31 m del eje.
-    "arco_area_sup_der":    (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2 - 7.31),
-    "arco_area_inf_der":    (FIELD_LENGTH - 16.5, FIELD_WIDTH / 2 + 7.31),
-    "arco_area_sup_izq":    (16.5, FIELD_WIDTH / 2 - 7.31),
-    "arco_area_inf_izq":    (16.5, FIELD_WIDTH / 2 + 7.31),
-}
+# cuáles puede ver claramente en su video (no siempre se ve la cancha entera).
+# Dependen de las medidas de la cancha: ver puntos_referencia().
+def puntos_referencia(medidas: dict | None = None) -> dict:
+    """Coordenadas en metros de cada punto de referencia, para las medidas
+    de cancha dadas (None → reglamentarias, 105×68)."""
+    m = completar_medidas(medidas)
+    L, W = m["largo"], m["ancho"]
+    ag_l, ag_a = m["area_grande_largo"], m["area_grande_ancho"]
+    ac_a, r = m["area_chica_ancho"], m["radio_circulo"]
+    medialuna = offset_medialuna(m)
+    return {
+        "esquina_sup_izq":      (0.0, 0.0),
+        "esquina_sup_der":      (L, 0.0),
+        "esquina_inf_izq":      (0.0, W),
+        "esquina_inf_der":      (L, W),
+        "penal_izq":            (m["distancia_penal"], W / 2),
+        "penal_der":            (L - m["distancia_penal"], W / 2),
+        "area_chica_sup_izq":   (0.0, W / 2 - ac_a / 2),
+        "area_chica_inf_izq":   (0.0, W / 2 + ac_a / 2),
+        "area_grande_sup_izq":  (0.0, W / 2 - ag_a / 2),
+        "area_grande_inf_izq":  (0.0, W / 2 + ag_a / 2),
+        # Lado derecho (arco derecho) — para cámaras que solo ven la mitad de cancha
+        "area_chica_sup_der":   (L, W / 2 - ac_a / 2),
+        "area_chica_inf_der":   (L, W / 2 + ac_a / 2),
+        "area_grande_sup_der":  (L - ag_l, W / 2 - ag_a / 2),
+        "area_grande_inf_der":  (L - ag_l, W / 2 + ag_a / 2),
+        "area_grande_borde_der": (L - ag_l, W / 2),
+        "centro_cancha":        (L / 2, W / 2),
+        "mitad_linea_sup":      (L / 2, 0.0),
+        "mitad_linea_inf":      (L / 2, W),
+        # Cruces de la línea media con el círculo central: puntos nítidos y
+        # casi siempre visibles en planos de transmisión.
+        "circulo_mitad_sup":    (L / 2, W / 2 - r),
+        "circulo_mitad_inf":    (L / 2, W / 2 + r),
+        # Donde la medialuna del área (radio r desde el punto penal) corta la
+        # línea del frente del área: ±7.31 m del eje con medidas reglamentarias.
+        "arco_area_sup_der":    (L - ag_l, W / 2 - medialuna),
+        "arco_area_inf_der":    (L - ag_l, W / 2 + medialuna),
+        "arco_area_sup_izq":    (ag_l, W / 2 - medialuna),
+        "arco_area_inf_izq":    (ag_l, W / 2 + medialuna),
+    }
+
+
+# Con las medidas reglamentarias: para validar nombres y compatibilidad.
+REFERENCE_POINTS = puntos_referencia()
 # OJO con la convención de nombres heredada: "area_grande_sup_izq/inf_izq"
 # están sobre la LÍNEA DE FONDO (x=0), mientras que "area_grande_sup_der/
 # inf_der" son las esquinas del FRENTE del área (x=105-16.5). No se
@@ -113,11 +134,6 @@ RIGHT_HALF_ORDER = ["mitad_linea_sup", "mitad_linea_inf", "area_grande_sup_der",
 # control mide contra las líneas de cal reales del frame, LEJOS de los puntos
 # usados en el ajuste — eso sí es evidencia independiente.
 
-# Medidas reglamentarias de las marcas que se dibujan/verifican (metros).
-_AREA_GRANDE_LARGO, _AREA_GRANDE_ANCHO = 16.5, 40.32
-_AREA_CHICA_LARGO, _AREA_CHICA_ANCHO = 5.5, 18.32
-_RADIO_CIRCULO = 9.15
-
 QC_PASO_MUESTREO_M = 1.0      # cada cuántos metros se muestrea cada línea
 # Las muestras más cerca que esto de un punto de ajuste no cuentan: ahí la
 # proyección coincide por construcción y mediría el ajuste, no la calidad.
@@ -134,11 +150,13 @@ QC_MIN_MUESTRAS = 30          # menos muestras verificadas que esto → "no veri
 QC_MAX_SIN_LINEA = 0.5
 
 
-def _lineas_cancha() -> dict:
+def _lineas_cancha(medidas: dict | None = None) -> dict:
     """Marcas de la cancha como polilíneas en metros (origen esquina sup-izq)."""
-    L, W = FIELD_LENGTH, FIELD_WIDTH
-    yg1, yg2 = (W - _AREA_GRANDE_ANCHO) / 2, (W + _AREA_GRANDE_ANCHO) / 2
-    yc1, yc2 = (W - _AREA_CHICA_ANCHO) / 2, (W + _AREA_CHICA_ANCHO) / 2
+    m = completar_medidas(medidas)
+    L, W = m["largo"], m["ancho"]
+    ag_l, ac_l, r = m["area_grande_largo"], m["area_chica_largo"], m["radio_circulo"]
+    yg1, yg2 = (W - m["area_grande_ancho"]) / 2, (W + m["area_grande_ancho"]) / 2
+    yc1, yc2 = (W - m["area_chica_ancho"]) / 2, (W + m["area_chica_ancho"]) / 2
     t = np.linspace(0, 2 * np.pi, 120)
     return {
         "banda_lejana":     [(0, 0), (L, 0)],
@@ -146,11 +164,11 @@ def _lineas_cancha() -> dict:
         "fondo_izq":        [(0, 0), (0, W)],
         "fondo_der":        [(L, 0), (L, W)],
         "linea_media":      [(L / 2, 0), (L / 2, W)],
-        "circulo_central":  list(zip(L / 2 + _RADIO_CIRCULO * np.cos(t), W / 2 + _RADIO_CIRCULO * np.sin(t))),
-        "area_grande_izq":  [(0, yg1), (_AREA_GRANDE_LARGO, yg1), (_AREA_GRANDE_LARGO, yg2), (0, yg2)],
-        "area_grande_der":  [(L, yg1), (L - _AREA_GRANDE_LARGO, yg1), (L - _AREA_GRANDE_LARGO, yg2), (L, yg2)],
-        "area_chica_izq":   [(0, yc1), (_AREA_CHICA_LARGO, yc1), (_AREA_CHICA_LARGO, yc2), (0, yc2)],
-        "area_chica_der":   [(L, yc1), (L - _AREA_CHICA_LARGO, yc1), (L - _AREA_CHICA_LARGO, yc2), (L, yc2)],
+        "circulo_central":  list(zip(L / 2 + r * np.cos(t), W / 2 + r * np.sin(t))),
+        "area_grande_izq":  [(0, yg1), (ag_l, yg1), (ag_l, yg2), (0, yg2)],
+        "area_grande_der":  [(L, yg1), (L - ag_l, yg1), (L - ag_l, yg2), (L, yg2)],
+        "area_chica_izq":   [(0, yc1), (ac_l, yc1), (ac_l, yc2), (0, yc2)],
+        "area_chica_der":   [(L, yc1), (L - ac_l, yc1), (L - ac_l, yc2), (L, yc2)],
     }
 
 
@@ -201,7 +219,8 @@ def _mascara_lineas(frame: np.ndarray) -> np.ndarray:
     return mascara.astype(bool)
 
 
-def control_calidad(frame: np.ndarray, H: np.ndarray, puntos_ajuste_m, ruta_png: Path) -> dict:
+def control_calidad(frame: np.ndarray, H: np.ndarray, puntos_ajuste_m, ruta_png: Path,
+                    medidas: dict | None = None) -> dict:
     """
     Verifica una homografía (píxel → metros) contra las líneas de cal reales.
 
@@ -214,6 +233,7 @@ def control_calidad(frame: np.ndarray, H: np.ndarray, puntos_ajuste_m, ruta_png:
 
     Sirve igual para la calibración manual (puntos clickeados) y la
     automática (keypoints inliers): no depende de cómo se obtuvo H.
+    `medidas`: las de la cancha (ver medidas_cancha.py); None → 105×68.
 
     Returns:
         dict con `veredicto` ("ok" | "revisar" | "no_verificable"), `motivos`,
@@ -227,7 +247,8 @@ def control_calidad(frame: np.ndarray, H: np.ndarray, puntos_ajuste_m, ruta_png:
     # incluido. Se fija el signo para que w>0 en los puntos de ajuste (que
     # seguro están delante de la cámara); si no, "w<=0 = detrás de la cámara"
     # descartaría la cancha entera según cómo vino escalada H.
-    ref = ajuste.mean(axis=0) if len(ajuste) else np.array([FIELD_LENGTH / 2, FIELD_WIDTH / 2])
+    m_cancha = completar_medidas(medidas)
+    ref = ajuste.mean(axis=0) if len(ajuste) else np.array([m_cancha["largo"] / 2, m_cancha["ancho"] / 2])
     if (np.r_[ref, 1.0] @ Hinv.T)[2] < 0:
         Hinv = -Hinv
     mascara = _mascara_lineas(frame)
@@ -238,7 +259,7 @@ def control_calidad(frame: np.ndarray, H: np.ndarray, puntos_ajuste_m, ruta_png:
     por_linea, errores_m, errores_px = {}, [], []
     n_en_cuadro = n_sin_linea = 0
 
-    for nombre, polilinea in _lineas_cancha().items():
+    for nombre, polilinea in _lineas_cancha(m_cancha).items():
         muestras = _muestrear(polilinea, QC_PASO_MUESTREO_M)
         homog = np.c_[muestras, np.ones(len(muestras))] @ Hinv.T
         delante = homog[:, 2] > 1e-9                     # w<=0: detrás de la cámara
@@ -399,14 +420,20 @@ class CalibrationUI:
                 return self.clicks
 
 
-def calibrate(video_path: Path, point_names: list = None, frame_idx: int = 0) -> Path:
+def calibrate(video_path: Path, point_names: list = None, frame_idx: int = 0,
+              medidas: dict | None = None) -> Path:
     """
     Abre el frame `frame_idx` del video (por defecto el primero) y pide clics
     en los puntos de referencia. Guarda la homografía resultante en un .json.
     Conviene elegir un frame con la cámara en su posición más habitual y
     usar puntos que se VEAN (no extrapolar marcas fuera de cuadro).
+
+    `medidas`: las de la cancha (ver medidas_cancha.py; None → 105×68). Se
+    guarda una COPIA en el .json, que es la que usan --apply y --verificar.
     """
     point_names = point_names or DEFAULT_ORDER
+    medidas = completar_medidas(medidas)
+    puntos = puntos_referencia(medidas)
 
     cap = cv2.VideoCapture(str(video_path))
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -415,10 +442,11 @@ def calibrate(video_path: Path, point_names: list = None, frame_idx: int = 0) ->
     if not ret:
         sys.exit(f"[ERROR] No se pudo leer el frame {frame_idx} de: {video_path}")
 
-    print(f"\nSe abrirá una ventana con el frame {frame_idx}. Hacé clic, en orden, en estos "
+    print(f"\nCancha: {descripcion(medidas)}")
+    print(f"Se abrirá una ventana con el frame {frame_idx}. Hacé clic, en orden, en estos "
           f"{len(point_names)} puntos:")
     for i, name in enumerate(point_names, 1):
-        x, y = REFERENCE_POINTS[name]
+        x, y = puntos[name]
         print(f"  {i}. {name.replace('_', ' '):<22} (x={x:.2f} m, y={y:.2f} m)")
     print("\nSi alguno de estos puntos no se ve en tu video, cancelá (Q) y volvé a")
     print("llamar a calibrate() pasando otra lista de puntos que sí se vean")
@@ -431,7 +459,7 @@ def calibrate(video_path: Path, point_names: list = None, frame_idx: int = 0) ->
     if pixel_points is None:
         sys.exit("[INFO] Calibración cancelada.")
 
-    real_points = [REFERENCE_POINTS[name] for name in point_names]
+    real_points = [puntos[name] for name in point_names]
 
     src = np.array(pixel_points, dtype=np.float32)
     dst = np.array(real_points, dtype=np.float32)
@@ -458,7 +486,8 @@ def calibrate(video_path: Path, point_names: list = None, frame_idx: int = 0) ->
     # Control de calidad contra las líneas reales del mismo frame. No bloquea
     # el guardado (el usuario decide), pero el veredicto queda en el .json y
     # se imprime fuerte si no es "ok".
-    control = control_calidad(frame, H, real_points, OUTPUTS / f"{video_path.stem}_calibracion_control.png")
+    control = control_calidad(frame, H, real_points, OUTPUTS / f"{video_path.stem}_calibracion_control.png",
+                              medidas)
 
     calibration = {
         "video": video_path.name,
@@ -467,6 +496,7 @@ def calibrate(video_path: Path, point_names: list = None, frame_idx: int = 0) ->
         "pixel_points": pixel_points,
         "real_points": real_points,
         "homography_matrix": H.tolist(),
+        CLAVE_ATTRS: medidas,
         "control_calidad": control,
     }
     with open(out_path, "w") as f:
@@ -496,11 +526,53 @@ def verificar_calibracion(video_path: Path, homography_path: Path, frame_idx: in
     if not ok:
         sys.exit(f"[ERROR] No se pudo leer el frame {idx} de: {video_path}")
     ruta_png = homography_path.parent / f"{homography_path.stem.replace('_homography', '')}_calibracion_control_f{idx}.png"
+    medidas = completar_medidas(calib.get(CLAVE_ATTRS))
     control = control_calidad(frame, np.array(calib["homography_matrix"], dtype=np.float64),
-                              calib["real_points"], ruta_png)
+                              calib["real_points"], ruta_png, medidas)
     print(f"\nCalibración: {homography_path.name}  (puntos: {', '.join(calib['point_names'])})  — frame {idx}")
+    print(f"Cancha: {descripcion(medidas)}")
     imprimir_control(control)
     return control
+
+
+def _medidas_para_calibrar(match_name: str, nombre_estadio: str | None) -> dict:
+    """
+    Medidas a usar al calibrar `match_name`:
+      - con `nombre_estadio`: las de ese estadio, y queda asignado al partido;
+      - sin él: las del estadio ya asignado al partido (match_estadio);
+      - si no hay ninguno: las reglamentarias (105×68), avisando.
+    """
+    from src.db import estadio_repo
+    estadio_repo.init_estadios_table()
+    if nombre_estadio:
+        estadio = estadio_repo.get_estadio(nombre_estadio)
+        if estadio is None:
+            sys.exit(f"[ERROR] No existe el estadio '{nombre_estadio}'. Cargalo primero:\n"
+                     f"  python scripts/estadios.py alta \"{nombre_estadio}\" --largo <m> --ancho <m>")
+        estadio_repo.set_match_estadio(match_name, estadio["id"])
+        return completar_medidas(estadio["medidas"])
+    estadio = estadio_repo.get_match_estadio(match_name)
+    if estadio is not None:
+        return completar_medidas(estadio["medidas"])
+    print("[AVISO] El partido no tiene estadio asignado: se calibra con la cancha reglamentaria "
+          "de 105×68. Si la cancha mide otra cosa, cancelá y pasá --estadio "
+          "(ver python scripts/estadios.py listar).")
+    return completar_medidas(None)
+
+
+def _avisar_si_cambio_estadio(match_name: str, medidas_calibracion: dict) -> None:
+    """Si el estadio asignado hoy al partido tiene medidas distintas de las
+    que guardó la calibración, avisa: las coordenadas saldrían con las viejas."""
+    from src.db import estadio_repo
+    estadio_repo.init_estadios_table()
+    estadio = estadio_repo.get_match_estadio(match_name)
+    if estadio is None:
+        return
+    actuales = completar_medidas(estadio["medidas"])
+    if any(abs(actuales[k] - medidas_calibracion[k]) > 1e-6 for k in MEDIDAS_REGLAMENTARIAS):
+        print(f"[AVISO] El estadio asignado al partido ahora es {descripcion(actuales)}, pero la "
+              f"calibración se hizo con {descripcion(medidas_calibracion)}. Se usan las de la "
+              f"calibración; para usar las nuevas, recalibrá.")
 
 
 def apply_homography(coords_path: Path, homography_path: Path) -> Path:
@@ -510,10 +582,19 @@ def apply_homography(coords_path: Path, homography_path: Path) -> Path:
 
     Filtra detecciones que caen fuera de la cancha (con margen OUT_OF_BOUNDS_MARGIN)
     para descartar banco, cuerpo técnico, árbitros de línea fuera de juego, etc.
+
+    Las medidas de la cancha salen del .json de la calibración (la copia que
+    guardó calibrate(); un .json anterior a eso → 105×68) y se guardan en el
+    parquet como metadata: `df.attrs["medidas_cancha"]`, que pandas conserva
+    al leer y escribir. Sin columnas nuevas — el contrato del parquet no cambia.
     """
     with open(homography_path) as f:
         calib = json.load(f)
     H = np.array(calib["homography_matrix"], dtype=np.float64)
+    medidas = completar_medidas(calib.get(CLAVE_ATTRS))
+    print(f"Cancha: {descripcion(medidas)}" + ("" if CLAVE_ATTRS in calib else
+          "  — la calibración es anterior a las medidas por estadio"))
+    _avisar_si_cambio_estadio(homography_path.stem.replace("_homography", ""), medidas)
 
     df = pd.read_parquet(coords_path)
 
@@ -525,14 +606,15 @@ def apply_homography(coords_path: Path, homography_path: Path) -> Path:
 
     margin = OUT_OF_BOUNDS_MARGIN
     in_bounds = (
-        (df["field_x"] >= -margin) & (df["field_x"] <= FIELD_LENGTH + margin) &
-        (df["field_y"] >= -margin) & (df["field_y"] <= FIELD_WIDTH + margin)
+        (df["field_x"] >= -margin) & (df["field_x"] <= medidas["largo"] + margin) &
+        (df["field_y"] >= -margin) & (df["field_y"] <= medidas["ancho"] + margin)
     )
     n_out = (~in_bounds).sum()
     n_total = len(df)
 
     # Filtramos las detecciones fuera de cancha del resultado final
     df_filtered = df[in_bounds].copy()
+    df_filtered.attrs[CLAVE_ATTRS] = medidas
 
     if n_out > 0:
         pct = n_out / n_total * 100
@@ -546,6 +628,7 @@ def apply_homography(coords_path: Path, homography_path: Path) -> Path:
 
     print(f"\n✅ Coordenadas de cancha exportadas: {out_path.name}")
     print(f"   Nuevas columnas: field_x, field_y (metros, origen en esquina sup-izquierda)")
+    print(f"   Medidas de la cancha guardadas como metadata del parquet: {descripcion(medidas)}")
     print(f"   {len(df_filtered)} de {n_total} detecciones conservadas.")
     return out_path
 
@@ -564,6 +647,8 @@ Ejemplos:
       --points mitad_linea_sup,mitad_linea_inf,area_grande_sup_der,area_grande_inf_der
 
   python src/homography/calibrate.py data/videos/partido.mp4 --verificar --frame 3000
+
+  python src/homography/calibrate.py data/videos/partido.mp4 --estadio "Sportivo Belgrano"
         """,
     )
     parser.add_argument("video", type=str, help="Ruta al video .mp4 (para calibrar) o de referencia")
@@ -579,9 +664,15 @@ Ejemplos:
     parser.add_argument("--frame", type=int, default=None,
                          help="Frame sobre el cual calibrar (default: 0) o, con --verificar, sobre el "
                               "cual verificar (default: el frame con el que se calibró)")
+    parser.add_argument("--estadio", type=str, default=None,
+                         help="Al calibrar: estadio cuyas medidas usar (ver scripts/estadios.py); queda "
+                              "asignado al partido. Sin esto: el estadio ya asignado o, si no hay, 105×68")
     args = parser.parse_args()
 
     video_path = Path(args.video)
+    if args.estadio and (args.apply or args.verificar):
+        sys.exit("[ERROR] --estadio va solo al calibrar: --apply y --verificar usan las medidas que "
+                 "quedaron guardadas en la calibración. Para cambiarlas, recalibrá con --estadio.")
     if not video_path.exists():
         sys.exit(f"[ERROR] Video no encontrado: {video_path}")
 
@@ -606,4 +697,5 @@ Ejemplos:
             if invalid:
                 sys.exit(f"[ERROR] Puntos no reconocidos: {invalid}\n"
                           f"  Opciones válidas: {list(REFERENCE_POINTS.keys())}")
-        calibrate(video_path, point_names=point_names, frame_idx=args.frame or 0)
+        medidas = _medidas_para_calibrar(video_path.stem, args.estadio)
+        calibrate(video_path, point_names=point_names, frame_idx=args.frame or 0, medidas=medidas)

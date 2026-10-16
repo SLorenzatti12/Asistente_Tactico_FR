@@ -3,9 +3,11 @@ Analizador Táctico — Asignación automática de equipo por color de camiseta
 =============================================================================
 El pipeline (run_inference.py + calibrate.py) detecta y trackea jugadores
 pero no sabe de qué equipo es cada uno. Este módulo lo infiere del color
-de la camiseta: muestrea frames del video, extrae el color de torso de
-cada jugador detectado, agrupa esos colores en 2 clusters (KMeans) y le
-asigna a cada track_id el equipo por voto mayoritario de sus muestras.
+de la camiseta: toma unas pocas muestras de la vida de cada track de
+jugador, extrae el color de torso (descartando el pasto con un rango de
+color medido en el propio video), agrupa esos colores en 2 clusters
+(KMeans) y le asigna a cada track_id el equipo por voto mayoritario de sus
+muestras.
 
 Flujo:
     df = pd.read_parquet("data/outputs/partido_clip2_coords_field.parquet")
@@ -69,12 +71,41 @@ V_MAX_GRIS = 200      # ... salvo que además sea MUY brillante: eso es tela
 # docstring del módulo.
 H_PASTO_MIN, H_PASTO_MAX = 35, 95
 S_PASTO_MIN = 60
+# Esos valores fijos son el FALLBACK. Por defecto el rango de pasto se estima
+# del propio video (ver _estimar_pasto): con luz de estadio amarilla, de
+# noche, el pasto de sportivo_crop3 tiene matiz 33-37 — justo en el corte de
+# H_PASTO_MIN=35 — y en los recortes de torso (jugadores de ~30 px) casi
+# todo píxel es una mezcla camiseta/pasto con matiz ~30 que pasaba el filtro
+# fijo: solo se descartaba el 13% del recorte como pasto.
+N_FRAMES_PASTO = 20       # frames muestreados para estimar el color del pasto
+VENTANA_H_PASTO = 15      # candidatos a pasto: matiz a ± esto del pico dominante del fondo
+K_MAD_PASTO = 5.0         # rango de pasto = mediana ± K desvíos robustos (MAD × 1.4826)
+MIN_SEMIANCHO_H_PASTO = 3 # semiancho mínimo del rango de matiz (pasto muy parejo → MAD ~0)
+MARGEN_H_PASTO = 2        # margen extra de matiz a cada lado
 
 MIN_PIXELES_TORSO = 15  # mínimo de píxeles válidos en el recorte para confiar en la mediana
 
 # ── Muestreo y votación ─────────────────────────────────────
-N_MUESTRAS_DEFAULT = 30       # frames a muestrear a lo largo del video
+# Muestreo por track (default): hasta MUESTRAS_POR_TRACK frames de la vida de
+# cada track de jugador, repartidos a lo largo de ella. El muestreo anterior
+# (N_MUESTRAS_DEFAULT frames uniformes en todo el video) deja casi todos los
+# tracks sin asignar en un video largo con tracks cortos: en sportivo_crop3
+# (26 min, 2.819 tracks de mediana 15 frames) solo 57 tracks juntaban las 2
+# muestras mínimas. Se conserva como modo alternativo (n_muestras=...).
+MUESTRAS_POR_TRACK = 5
+PASO_GRILLA_MUESTREO = 5      # los frames de muestra se eligen sobre una grilla de 1 cada 5,
+#                               así los tracks que conviven comparten frames y se decodifican menos
+SALTO_MAX_SECUENCIAL = 120    # hasta este salto se avanza con grab() en vez de reposicionar el video
+N_MUESTRAS_DEFAULT = 30       # modo alternativo: frames a muestrear a lo largo del video
 MIN_MUESTRAS_TRACK = 2        # mínimo de muestras válidas por track para confiar en el voto
+
+# Un track es "arquero" (equipo por geometría, fuera del clustering de color)
+# solo si MÁS de esta fracción de sus filas de persona son `goalkeeper`. El
+# detector confunde seguido jugador y arquero en detecciones sueltas: con la
+# regla anterior (cualquier fila goalkeeper) en sportivo_crop3 había 785
+# tracks "arquero", 708 de ellos casi siempre `player`, que recibían equipo
+# por la mitad de cancha en la que estaban y no por su camiseta.
+PROPORCION_MIN_ARQUERO = 0.5
 
 # Diferencia mínima de luminancia (0-255) entre los dos colores de equipo
 # para que el orden "home = más clara" sea confiable (ver
@@ -84,7 +115,8 @@ MIN_DIF_LUMINANCIA = 20
 
 
 # ── Color de torso ───────────────────────────────────────────
-def extraer_color_torso(frame: np.ndarray, bbox: tuple[float, float, float, float]) -> tuple[int, int, int] | None:
+def extraer_color_torso(frame: np.ndarray, bbox: tuple[float, float, float, float],
+                        pasto: dict | None = None) -> tuple[int, int, int] | None:
     """
     Color dominante de la camiseta de un jugador, a partir de su bounding box.
 
@@ -108,6 +140,8 @@ def extraer_color_torso(frame: np.ndarray, bbox: tuple[float, float, float, floa
     Args:
         frame: imagen BGR (la que devuelve cv2.VideoCapture.read()).
         bbox: (x1, y1, x2, y2) en píxeles — mismo sistema que x1..y2 del parquet.
+        pasto: rango de pasto {"h_min", "h_max", "s_min"} estimado del video
+            (ver _estimar_pasto). None → rango fijo H_PASTO_MIN/MAX, S_PASTO_MIN.
 
     Returns:
         (r, g, b) del color dominante, o None si el bbox es inválido, cae
@@ -140,7 +174,10 @@ def extraer_color_torso(frame: np.ndarray, bbox: tuple[float, float, float, floa
     h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
     es_sombra = v <= V_MIN_SOMBRA
     es_gris = (s < S_MIN_GRIS) & (v < V_MAX_GRIS)
-    es_pasto = (h >= H_PASTO_MIN) & (h <= H_PASTO_MAX) & (s > S_PASTO_MIN)
+    if pasto is None:
+        es_pasto = (h >= H_PASTO_MIN) & (h <= H_PASTO_MAX) & (s > S_PASTO_MIN)
+    else:
+        es_pasto = (h >= pasto["h_min"]) & (h <= pasto["h_max"]) & (s >= pasto["s_min"])
     valido = ~es_sombra & ~es_gris & ~es_pasto
 
     if int(valido.sum()) < MIN_PIXELES_TORSO:
@@ -149,6 +186,78 @@ def extraer_color_torso(frame: np.ndarray, bbox: tuple[float, float, float, floa
     pixeles_bgr = recorte[valido]                 # Nx3, en BGR (formato nativo de OpenCV)
     b, g, r = np.median(pixeles_bgr, axis=0)       # mediana por canal — robusta a outliers
     return (int(round(r)), int(round(g)), int(round(b)))
+
+
+# ── Color del pasto, estimado del propio video ───────────────
+def _estimar_pasto(cap: cv2.VideoCapture, df: pd.DataFrame,
+                   n_frames: int = N_FRAMES_PASTO) -> dict | None:
+    """
+    Rango HSV del pasto de ESTE video, medido sobre el fondo de la cancha.
+
+    En `n_frames` frames repartidos por el video se toman los píxeles fuera
+    de toda detección (bboxes agrandados, para no tocar jugadores ni sombras
+    pegadas), con algo de color y de brillo. El pasto es la gran mayoría de
+    ese fondo, así que el pico del histograma de matiz es el pasto; los
+    candidatos son los píxeles a ±VENTANA_H_PASTO de ese pico. El rango
+    final es mediana ± K_MAD_PASTO desvíos robustos (MAD), en matiz (más
+    MARGEN_H_PASTO) y en saturación (solo la cota inferior, con piso
+    S_PASTO_MIN). Mediana y MAD, y no percentiles de las colas, porque el
+    fondo también tiene tribuna, carteles y pista con matiz parecido: en
+    sportivo_crop3 son ~10% de los candidatos y bajaban el p5 de saturación
+    de ~120 a ~55, con lo que el "pasto" pasaba a comerse las camisetas
+    blancas.
+
+    La saturación mínima es la que protege a las camisetas: el blanco bajo
+    luz amarilla tiene un matiz parecido al del pasto nocturno (~25-30), pero
+    mucha menos saturación.
+
+    Returns:
+        {"h_min", "h_max", "s_min", "h_pico", "n_pixeles"}, o None si no hay
+        fondo suficiente o el pico no cae en un matiz verde/amarillento
+        plausible (20-95) — en ese caso el llamador usa el rango fijo.
+    """
+    frames = _muestrear_frames(df, n_frames)
+    hs, ss = [], []
+    for frame_num in frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, float(frame_num - 1))
+        ok, imagen = cap.read()
+        if not ok or imagen is None:
+            continue
+        alto, ancho = imagen.shape[:2]
+        fondo = np.ones((alto, ancho), dtype=bool)
+        for fila in df[df["frame"] == frame_num].itertuples(index=False):
+            x1, x2 = sorted((fila.x1, fila.x2))
+            y1, y2 = sorted((fila.y1, fila.y2))
+            m = 0.3 * (y2 - y1)
+            fondo[max(int(y1 - m), 0):int(y2 + m) + 1, max(int(x1 - m), 0):int(x2 + m) + 1] = False
+        hsv = cv2.cvtColor(imagen, cv2.COLOR_BGR2HSV)[::4, ::4]  # submuestreo: sobra con 1 de cada 16
+        fondo = fondo[::4, ::4] & (hsv[..., 1] > 40) & (hsv[..., 2] > 40)
+        hs.append(hsv[..., 0][fondo])
+        ss.append(hsv[..., 1][fondo])
+    if not hs:
+        return None
+    h = np.concatenate(hs).astype(int)
+    s = np.concatenate(ss).astype(int)
+    if h.size < 1000:
+        return None
+
+    hist = np.convolve(np.bincount(h, minlength=180), np.ones(5) / 5, mode="same")
+    h_pico = int(np.argmax(hist))
+    if not 20 <= h_pico <= 95:
+        return None
+    candidatos = np.abs(h - h_pico) <= VENTANA_H_PASTO
+    h_c, s_c = h[candidatos], s[candidatos]
+    h_med, s_med = np.median(h_c), np.median(s_c)
+    h_desvio = 1.4826 * np.median(np.abs(h_c - h_med))
+    s_desvio = 1.4826 * np.median(np.abs(s_c - s_med))
+    semiancho_h = max(K_MAD_PASTO * h_desvio, MIN_SEMIANCHO_H_PASTO) + MARGEN_H_PASTO
+    return {
+        "h_min": int(np.floor(h_med - semiancho_h)),
+        "h_max": int(np.ceil(h_med + semiancho_h)),
+        "s_min": max(int(round(s_med - K_MAD_PASTO * s_desvio)), S_PASTO_MIN),
+        "h_pico": h_pico,
+        "n_pixeles": int(h_c.size),
+    }
 
 
 # ── Muestreo de frames ───────────────────────────────────────
@@ -167,26 +276,70 @@ def _muestrear_frames(df: pd.DataFrame, n_muestras: int) -> list[int]:
     return sorted({int(f) for f in disponibles[indices]})
 
 
-def _recolectar_muestras_color(cap: cv2.VideoCapture, df: pd.DataFrame,
-                                frames: list[int]) -> pd.DataFrame:
+def _muestrear_por_track(df: pd.DataFrame, muestras_por_track: int,
+                         paso: int = PASO_GRILLA_MUESTREO) -> pd.DataFrame:
     """
-    Recorre los frames muestreados y extrae el color de torso de cada
-    jugador de campo (`player`) detectado ahí. Los arqueros quedan afuera
-    a propósito — ver _asignar_arqueros(), que los resuelve por geometría
-    en vez de por color.
+    Detecciones de `player` a muestrear: hasta `muestras_por_track` por
+    track, repartidas a lo largo de su vida.
+
+    Los frames se eligen sobre una grilla común (frame múltiplo de `paso`)
+    para que los tracks que conviven en pantalla compartan frames — hay que
+    decodificar menos. Un track tan corto que no toca la grilla aporta su
+    frame central.
+    """
+    jugadores = df[df["class_name"] == "player"].drop_duplicates(["track_id", "frame"])
+    elegidas = []
+    for _, sub in jugadores.groupby("track_id"):
+        sub = sub.sort_values("frame")
+        en_grilla = sub[sub["frame"] % paso == 0]
+        if en_grilla.empty:
+            elegidas.append(sub.iloc[[len(sub) // 2]])
+            continue
+        n = min(muestras_por_track, len(en_grilla))
+        indices = np.unique(np.linspace(0, len(en_grilla) - 1, n).round().astype(int))
+        elegidas.append(en_grilla.iloc[indices])
+    if not elegidas:
+        return jugadores.iloc[0:0]
+    return pd.concat(elegidas)
+
+
+def _leer_frames(cap: cv2.VideoCapture, frames: list[int]):
+    """
+    Genera (frame, imagen) para los `frames` pedidos (1-based, como el
+    parquet), en orden. Avanza con grab() mientras el salto sea corto
+    —reposicionar el video obliga a decodificar desde el keyframe anterior
+    y con miles de frames cercanos es mucho más lento— y reposiciona solo
+    en los saltos largos.
+    """
+    posicion = None  # próximo índice 0-based que devolvería cap.read()
+    for frame_num in sorted(set(int(f) for f in frames)):
+        destino = frame_num - 1  # el parquet es 1-based, OpenCV 0-based
+        if posicion is None or destino < posicion or destino - posicion > SALTO_MAX_SECUENCIAL:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, float(destino))
+        else:
+            while posicion < destino:
+                if not cap.grab():
+                    return
+                posicion += 1
+        ok, imagen = cap.read()
+        posicion = destino + 1
+        if ok and imagen is not None:
+            yield frame_num, imagen
+
+
+def _recolectar_muestras_color(cap: cv2.VideoCapture, detecciones: pd.DataFrame,
+                                pasto: dict | None = None) -> pd.DataFrame:
+    """
+    Extrae el color de torso de cada detección de `detecciones` (filas de
+    `player` ya elegidas por _muestrear_por_track o por frames uniformes).
+    Los arqueros quedan afuera a propósito — ver _asignar_arqueros(), que
+    los resuelve por geometría en vez de por color.
     """
     filas = []
-    detecciones = df[(df["class_name"] == "player") & df["frame"].isin(frames)]
-
-    for frame_num, sub in detecciones.groupby("frame"):
-        # El campo "frame" del parquet es 1-based (run_inference.py cuenta
-        # frame_idx antes de guardar), OpenCV es 0-based: se resta 1 al buscar.
-        cap.set(cv2.CAP_PROP_POS_FRAMES, float(frame_num - 1))
-        ok, imagen = cap.read()
-        if not ok or imagen is None:
-            continue
-        for fila in sub.itertuples(index=False):
-            color = extraer_color_torso(imagen, (fila.x1, fila.y1, fila.x2, fila.y2))
+    por_frame = dict(tuple(detecciones.groupby("frame")))
+    for frame_num, imagen in _leer_frames(cap, list(por_frame)):
+        for fila in por_frame[frame_num].itertuples(index=False):
+            color = extraer_color_torso(imagen, (fila.x1, fila.y1, fila.x2, fila.y2), pasto)
             if color is not None:
                 filas.append({"track_id": int(fila.track_id),
                               "r": color[0], "g": color[1], "b": color[2]})
@@ -247,7 +400,19 @@ def _asignar_por_clustering(muestras: pd.DataFrame,
     return equipo_por_track, centros[[cluster_home, 1 - cluster_home]], orden_confiable
 
 
-def _asignar_arqueros(df: pd.DataFrame, equipo_por_track: dict[int, str]) -> dict[int, str]:
+def _tracks_arquero(df: pd.DataFrame) -> set[int]:
+    """Tracks cuyas filas de persona son mayormente `goalkeeper` (más de
+    PROPORCION_MIN_ARQUERO). El resto de los tracks con alguna fila
+    goalkeeper se tratan como jugadores de campo: equipo por color."""
+    personas = df[df["class_name"].isin(("player", "goalkeeper"))]
+    if personas.empty:
+        return set()
+    fraccion = (personas["class_name"] == "goalkeeper").groupby(personas["track_id"]).mean()
+    return {int(t) for t in fraccion.index[fraccion > PROPORCION_MIN_ARQUERO]}
+
+
+def _asignar_arqueros(df: pd.DataFrame, equipo_por_track: dict[int, str],
+                      tracks_arquero: set[int] | None = None) -> dict[int, str]:
     """
     A los arqueros no se los mete en el clustering de color: su camiseta
     suele ser de un tercer color, distinto al de ambos equipos, y mezclarlos
@@ -261,12 +426,18 @@ def _asignar_arqueros(df: pd.DataFrame, equipo_por_track: dict[int, str]) -> dic
     del mismo video) — con un partido completo de los dos tiempos en un
     solo archivo esta heurística geométrica ya no vale, habría que partir
     el análisis por mitad.
+
+    Solo se aplica a `tracks_arquero` (default: _tracks_arquero(df), los
+    mayormente goalkeeper); su posición se promedia sobre sus filas
+    goalkeeper.
     """
     equipo_por_track = dict(equipo_por_track)  # no mutar el dict del caller
+    if tracks_arquero is None:
+        tracks_arquero = _tracks_arquero(df)
     if "field_x" not in df.columns or not equipo_por_track:
         return equipo_por_track
 
-    jugadores = df[df["track_id"].isin(equipo_por_track)].copy()
+    jugadores = df[df["track_id"].isin(set(equipo_por_track) - tracks_arquero)].copy()
     if jugadores.empty:
         return equipo_por_track
 
@@ -279,7 +450,7 @@ def _asignar_arqueros(df: pd.DataFrame, equipo_por_track: dict[int, str]) -> dic
     equipo_ataca_x0 = x_prom_por_equipo.idxmax()
     punto_medio = (x_prom_por_equipo.min() + x_prom_por_equipo.max()) / 2
 
-    arqueros = df[df["class_name"] == "goalkeeper"]
+    arqueros = df[(df["class_name"] == "goalkeeper") & df["track_id"].isin(tracks_arquero)]
     for track_id, sub in arqueros.groupby("track_id"):
         x_prom = sub["field_x"].mean()
         if pd.isna(x_prom):
@@ -291,14 +462,19 @@ def _asignar_arqueros(df: pd.DataFrame, equipo_por_track: dict[int, str]) -> dic
 
 # ── API pública ──────────────────────────────────────────────
 def asignar_equipos(video_path, df: pd.DataFrame,
-                     n_muestras: int = N_MUESTRAS_DEFAULT,
-                     min_muestras_track: int = MIN_MUESTRAS_TRACK) -> pd.DataFrame:
+                     n_muestras: int | None = None,
+                     min_muestras_track: int = MIN_MUESTRAS_TRACK,
+                     muestras_por_track: int = MUESTRAS_POR_TRACK,
+                     pasto_adaptativo: bool = True) -> pd.DataFrame:
     """
     Asigna equipo ("home" / "away") a cada track_id de jugador o arquero,
     a partir del color de camiseta muestreado del video.
 
-    - `player`: color de torso muestreado en `n_muestras` frames + KMeans(2)
-      + voto mayoritario por track (ver _asignar_por_clustering).
+    - `player`: color de torso muestreado en hasta `muestras_por_track`
+      frames de la vida de cada track (o, con `n_muestras`, en ese número de
+      frames uniformes de todo el video) + KMeans(2) + voto mayoritario por
+      track (ver _asignar_por_clustering). El pasto se descarta con un rango
+      de color estimado del propio video (ver _estimar_pasto).
     - `goalkeeper`: por geometría, no por color — ver _asignar_arqueros().
     - `referee` / `ball`: quedan siempre con team = NaN.
     - Tracks con muy pocas muestras válidas (< min_muestras_track), o cuyas
@@ -315,9 +491,13 @@ def asignar_equipos(video_path, df: pd.DataFrame,
         video_path: ruta al video del partido (el mismo que generó el .parquet).
         df: DataFrame de detecciones — necesita frame, track_id, class_name,
             x1, y1, x2, y2 (y field_x si están los arqueros, para geometría).
-        n_muestras: frames a muestrear a lo largo del video.
+        n_muestras: None (default) → muestreo por track. Un número → modo
+            anterior: ese número de frames uniformes en todo el video.
         min_muestras_track: mínimo de muestras válidas por track para
             confiar en su voto mayoritario.
+        muestras_por_track: tope de muestras por track (muestreo por track).
+        pasto_adaptativo: False → rango de pasto fijo (H_PASTO_MIN/MAX,
+            S_PASTO_MIN) en vez de estimarlo del video.
 
     Returns:
         Copia de `df` con una columna `team` nueva ("home" / "away" / NaN).
@@ -353,13 +533,24 @@ def asignar_equipos(video_path, df: pd.DataFrame,
         raise RuntimeError(f"No se pudo abrir el video (¿códec no soportado?): {video_path}")
 
     try:
-        frames_muestreados = _muestrear_frames(resultado, n_muestras)
-        muestras = _recolectar_muestras_color(cap, resultado, frames_muestreados)
+        pasto = _estimar_pasto(cap, resultado) if pasto_adaptativo else None
+        if n_muestras is None:
+            detecciones = _muestrear_por_track(resultado, muestras_por_track)
+        else:
+            frames_muestreados = _muestrear_frames(resultado, n_muestras)
+            detecciones = resultado[(resultado["class_name"] == "player")
+                                    & resultado["frame"].isin(frames_muestreados)]
+        # Los arqueros quedan fuera del clustering aunque tengan filas
+        # `player`: su camiseta es un tercer color y ensuciaría los 2 clusters.
+        tracks_arquero = _tracks_arquero(resultado)
+        detecciones = detecciones[~detecciones["track_id"].isin(tracks_arquero)]
+        muestras = _recolectar_muestras_color(cap, detecciones, pasto)
     finally:
         cap.release()
 
     equipo_por_track, centros_cluster, orden_confiable = _asignar_por_clustering(muestras, min_muestras_track)
-    equipo_por_track = _asignar_arqueros(resultado, equipo_por_track)
+    n_por_color = len(equipo_por_track)
+    equipo_por_track = _asignar_arqueros(resultado, equipo_por_track, tracks_arquero)
 
     # OJO: ByteTrack no garantiza que un track_id sea siempre la misma clase
     # a lo largo del video — en este dataset hay track_id que aparecen como
@@ -383,8 +574,12 @@ def asignar_equipos(video_path, df: pd.DataFrame,
         "n_away": n_away,
         "n_sin_asignar": tracks_de_persona - (n_home + n_away),
         "n_muestras_validas": len(muestras),
+        "n_por_color": n_por_color,
+        "n_arqueros_por_geometria": len(set(equipo_por_track) & tracks_arquero),
         "colores_cluster_rgb": [tuple(int(round(c)) for c in centro) for centro in centros_cluster],
         "orden_etiquetas_confiable": orden_confiable,
+        # None si se usó el rango fijo (pasto_adaptativo=False o no se pudo estimar)
+        "pasto_hsv": pasto,
     }
     return resultado
 
@@ -403,8 +598,14 @@ Ejemplo:
     parser.add_argument("video", type=str, help="Ruta al video del partido")
     parser.add_argument("parquet", type=str,
                         help="Ruta al .parquet de coordenadas — se sobreescribe con la columna `team` agregada")
-    parser.add_argument("--n-muestras", type=int, default=N_MUESTRAS_DEFAULT,
-                        help=f"Frames a muestrear a lo largo del video (default: {N_MUESTRAS_DEFAULT})")
+    parser.add_argument("--muestras-por-track", type=int, default=MUESTRAS_POR_TRACK,
+                        help=f"Tope de muestras de color por track (default: {MUESTRAS_POR_TRACK})")
+    parser.add_argument("--n-muestras", type=int, default=None,
+                        help="Modo anterior: muestrear este número de frames uniformes en todo el "
+                             f"video en vez de muestrear por track (antes era el default, con {N_MUESTRAS_DEFAULT})")
+    parser.add_argument("--pasto-fijo", action="store_true",
+                        help=f"Usar el rango de pasto fijo (H {H_PASTO_MIN}-{H_PASTO_MAX}, S>{S_PASTO_MIN}) "
+                             "en vez de estimarlo del video")
     parser.add_argument("--min-muestras-track", type=int, default=MIN_MUESTRAS_TRACK,
                         help=f"Mínimo de muestras válidas para confiar en el voto de un track (default: {MIN_MUESTRAS_TRACK})")
     parser.add_argument("--out", type=str, default=None,
@@ -419,7 +620,9 @@ Ejemplo:
 
     try:
         resultado = asignar_equipos(args.video, df_entrada, n_muestras=args.n_muestras,
-                                     min_muestras_track=args.min_muestras_track)
+                                     min_muestras_track=args.min_muestras_track,
+                                     muestras_por_track=args.muestras_por_track,
+                                     pasto_adaptativo=not args.pasto_fijo)
     except (FileNotFoundError, RuntimeError, ValueError) as e:
         sys.exit(f"[ERROR] {e}")
 
@@ -431,7 +634,15 @@ Ejemplo:
     print(f"   🔵 home:         {info.get('n_home', 0)} tracks")
     print(f"   🔴 away:         {info.get('n_away', 0)} tracks")
     print(f"   ⚪ sin asignar:  {info.get('n_sin_asignar', 0)} tracks")
+    print(f"   Por color: {info.get('n_por_color', 0)} tracks  |  arqueros por geometría: "
+          f"{info.get('n_arqueros_por_geometria', 0)} tracks")
     print(f"   Muestras de color válidas usadas: {info.get('n_muestras_validas', 0)}")
+    pasto = info.get("pasto_hsv")
+    if pasto:
+        print(f"   Pasto estimado del video (HSV de OpenCV): H {pasto['h_min']}-{pasto['h_max']}, "
+              f"S ≥ {pasto['s_min']} (pico de matiz {pasto['h_pico']})")
+    else:
+        print(f"   Pasto: rango fijo H {H_PASTO_MIN}-{H_PASTO_MAX}, S > {S_PASTO_MIN}")
 
     colores = info.get("colores_cluster_rgb", [])
     if colores:
