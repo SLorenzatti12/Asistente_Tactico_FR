@@ -61,7 +61,9 @@ _STATIC_VIDEOS_DIR = _APP_DIR / "static" / "videos"
 
 # Tamaño máximo que Streamlit sirve como estático (MAX_APP_STATIC_FILE_SIZE en
 # streamlit/web/server/starlette/starlette_server_config.py): más grande → 404.
-LIMITE_ESTATICO_BYTES = 200 * 1024 * 1024
+# VIDEO_LIMITE_ESTATICO_MB permite bajarlo para probar el servidor local con un
+# video chico (p.ej. `VIDEO_LIMITE_ESTATICO_MB=50 streamlit run app/main.py`).
+LIMITE_ESTATICO_BYTES = int(os.environ.get("VIDEO_LIMITE_ESTATICO_MB", "200")) * 1024 * 1024
 
 # Cada cuánto el JS sondea video.currentTime y (si cambió) avisa a Python.
 # 4 Hz alcanza para que el mapa se sienta "en vivo"; 30 fps (cada frame de
