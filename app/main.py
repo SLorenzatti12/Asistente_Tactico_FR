@@ -39,6 +39,11 @@ from components.video_registry import render_video_registry
 # Patrones tácticos detectados (src/analysis/tactical_patterns.py)
 from components.tactical_patterns_view import render_tactical_patterns_tab
 
+# Partidos de dos tiempos: un video por tiempo (src/db/partido_repo.py)
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.db import partido_repo  # noqa: E402
+
 # Identidad visual del sistema (paleta, tipografía, CSS global)
 from theme import aplicar_estilos_globales
 
@@ -375,10 +380,24 @@ def init_state():
 
 
 # ── Selector de partido ──────────────────────────────────────
+def _match_dict(name: str, field_parquet: Path, partido: str | None = None, tiempo: int | None = None) -> dict:
+    return {
+        "name": name,
+        "field_parquet": field_parquet,
+        "video_path": ROOT / "data" / "videos" / f"{name}.mp4",
+        "tracked_video": OUTPUTS / f"{name}_tracked.mp4",
+        "partido": partido,   # None si es un video suelto
+        "tiempo": tiempo,     # 1 / 2, o None
+    }
+
+
 def match_selector() -> dict | None:
     """
-    Busca en data/outputs los partidos ya procesados (necesitan
-    <nombre>_field.parquet, generado por homography/calibrate.py).
+    Busca en data/outputs los videos ya procesados (necesitan
+    <nombre>_coords_field.parquet, generado por homography/calibrate.py).
+    Los que son un tiempo de un partido registrado (scripts/partidos.py) se
+    agrupan bajo el partido, con un selector de tiempo: cada tiempo sigue
+    siendo un video propio (su parquet, su dirección de ataque, sus eventos).
     Retorna un dict con las rutas relevantes, o None si no hay nada.
     """
     field_files = list(OUTPUTS.glob("*_field.parquet")) if OUTPUTS.exists() else []
@@ -390,17 +409,32 @@ def match_selector() -> dict | None:
         )
         return None
 
-    names = [f.stem.replace("_coords_field", "") for f in field_files]
-    # Label oculto: el contenedor que lo envuelve (en main()) ya dice "Partido".
-    selected = st.selectbox("Partido", names, label_visibility="collapsed")
-    idx = names.index(selected)
+    parquets = {f.stem.replace("_coords_field", ""): f for f in field_files}
+    partido_repo.init_partidos_table()
+    partidos = {nombre: [t for t in tiempos if t["match_name"] in parquets]
+                for nombre, tiempos in partido_repo.list_partidos().items()}
+    partidos = {nombre: tiempos for nombre, tiempos in partidos.items() if tiempos}
+    agrupados = {t["match_name"] for tiempos in partidos.values() for t in tiempos}
+    opciones = ([("partido", nombre) for nombre in sorted(partidos)]
+                + [("video", nombre) for nombre in sorted(parquets) if nombre not in agrupados])
 
-    return {
-        "name": selected,
-        "field_parquet": field_files[idx],
-        "video_path": ROOT / "data" / "videos" / f"{selected}.mp4",
-        "tracked_video": OUTPUTS / f"{selected}_tracked.mp4",
-    }
+    # Label oculto: el contenedor que lo envuelve (en main()) ya dice "Partido".
+    tipo, elegido = st.selectbox("Partido", opciones, format_func=lambda o: o[1],
+                                 label_visibility="collapsed", key="partido_elegido")
+    if tipo == "video":
+        return _match_dict(elegido, parquets[elegido])
+
+    tiempos = {t["tiempo"]: t["match_name"] for t in partidos[elegido]}
+    etiquetas = {1: "1° tiempo", 2: "2° tiempo"}
+    tiempo = st.segmented_control("Tiempo", list(tiempos), format_func=etiquetas.get,
+                                  default=min(tiempos), key=f"tiempo_elegido_{elegido}")
+    if tiempo is None:          # se deseleccionó el botón activo
+        tiempo = min(tiempos)
+    faltan = [etiquetas[t] for t in (1, 2) if t not in tiempos]
+    if faltan:
+        st.caption(f"Sin procesar todavía: {', '.join(faltan)}.")
+    nombre = tiempos[tiempo]
+    return _match_dict(nombre, parquets[nombre], elegido, tiempo)
 
 
 # ── Video sincronizado + slider manual + mapa + métricas ─────

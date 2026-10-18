@@ -56,3 +56,13 @@ Calcular `medidas = medidas_de_df(df)` después del `pd.read_parquet` y pasárse
   - Hoy ningún partido tiene tramos marcados (sportivo_crop3 se recalibró por tramos), así que no es urgente.
 - **`use_container_width` está deprecado** (Streamlit lo avisa en cada corrida). Hay que cambiarlo por `width="stretch"` en `roster_view.py:44` y `team_selector.py:50`.
 - **Índice por frame en el mapa** (baja prioridad, opción n del análisis de videos largos en decisiones.md): `_frame_at_time` recorre todo el DataFrame en cada actualización. Indexar los frames una vez (ordenarlos y buscarlos con `searchsorted`) lo baja de 3 ms a 0.07 ms con 90 minutos. Hoy no se nota, porque cada actualización tarda 21 ms en total.
+
+## Partidos de dos tiempos (18/10/2026)
+
+Cada tiempo se filma, procesa y analiza como un video propio, con su `match_name`. Se agrega una tabla local que los agrupa en un partido: `partido_tiempos` (`match_name` PK → `partido`, `tiempo` 1|2), en `src/db/partido_repo.py`. El alta se hace con `python3 scripts/partidos.py alta "<partido>" --t1 <video> --t2 <video>`, que además copia el equipo (`match_team`) y el estadio (`match_estadio`) a los dos tiempos.
+
+- **Sync a Supabase.** Hoy `partido_tiempos` es solo local. Para que en la nube un partido sea uno y no dos, hace falta:
+  - agregarla a `db/schema_cloud.sql`;
+  - sincronizarla en `src/db/sync.py`, con el mismo patrón que `match_team`;
+  - decidir si `matches` en la nube pasa a ser por partido, con sus dos videos colgando, o si sigue por video con una columna `partido`/`tiempo`. Los eventos y el tracking siguen siendo por video: sus tiempos son relativos a cada video.
+- **`team_selector.py`.** Hoy asigna el equipo a un solo video. Si se cambia desde la app para un tiempo, el otro queda con el anterior. Lo ideal es que, si el video pertenece a un partido (`partido_repo.get_tiempo(match_name)`), asigne a los dos (`partido_repo.tiempos_de(partido)`).

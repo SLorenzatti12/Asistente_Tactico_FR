@@ -53,6 +53,24 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
 
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from src.analysis.lados import detectar_cambio_de_lado, mensaje_cambio_de_lado  # noqa: E402
+
+# ── Segundo tiempo: colores del primero como referencia ──────
+# Cada tiempo decide "home = camiseta más clara" por su cuenta; con dos
+# camisetas de luminancia parecida eso podría invertirse entre tiempos. El
+# segundo tiempo usa como referencia los colores de equipo del primero
+# (colores_cluster_rgb de su parquet): cada cluster toma la etiqueta del color
+# de referencia más parecido. Distancia de color: ΔE en CIELAB (diferencia
+# percibida). Medido: entre las dos mitades de un mismo tiempo, la misma
+# camiseta varía ΔE 1–6 (sportivo_crop3, partido_clip2); local contra
+# visitante se separan ΔE 29–54. Si el color más parecido queda a más de
+# UMBRAL_DELTA_E_REFERENCIA (p.ej. pasar de luz natural a reflectores), NO se
+# fuerza: se avisa y se usa la regla de luminancia de este tiempo.
+UMBRAL_DELTA_E_REFERENCIA = 12.0   # el doble de la mayor variación natural, < mitad de la menor separación
+
 # ── Filtro de píxeles válidos para color de camiseta (HSV, rangos de OpenCV:
 # H 0-179, S/V 0-255) ─────────────────────────────────────────────────────
 V_MIN_SOMBRA = 35     # por debajo: sombra/negro — no aporta info de color
@@ -402,6 +420,57 @@ def _asignar_por_clustering(muestras: pd.DataFrame,
     return equipo_por_track, centros[[cluster_home, 1 - cluster_home]], orden_confiable
 
 
+def _a_lab(rgb) -> np.ndarray:
+    return cv2.cvtColor(np.uint8([[list(rgb)]]), cv2.COLOR_RGB2LAB)[0, 0].astype(float) * [100 / 255, 1, 1] - [0, 128, 128]
+
+
+def _delta_e(a, b) -> float:
+    return float(np.linalg.norm(_a_lab(a) - _a_lab(b)))
+
+
+def _aplicar_referencia(equipo_por_track: dict, centros: np.ndarray, referencia: list) -> tuple:
+    """
+    Etiqueta los dos clusters de este tiempo según los colores de referencia
+    [home, away] del otro tiempo (emparejamiento de menor ΔE). Si el par
+    elegido queda a más de UMBRAL_DELTA_E_REFERENCIA, no toca nada.
+    Devuelve (equipo_por_track, centros [home, away], info).
+    """
+    directo = [_delta_e(centros[0], referencia[0]), _delta_e(centros[1], referencia[1])]
+    cruzado = [_delta_e(centros[0], referencia[1]), _delta_e(centros[1], referencia[0])]
+    invertir = max(cruzado) < max(directo)
+    delta = cruzado if invertir else directo
+    info = {"referencia_rgb": [tuple(int(v) for v in c) for c in referencia],
+            "delta_e": [round(d, 1) for d in delta], "umbral": UMBRAL_DELTA_E_REFERENCIA}
+    if max(delta) > UMBRAL_DELTA_E_REFERENCIA:
+        info.update(usada=False, motivo=(
+            f"los colores de este tiempo se alejan de los del otro (ΔE {max(delta):.0f} > "
+            f"{UMBRAL_DELTA_E_REFERENCIA:g}; ¿cambió la luz?): no se fuerza la asignación, se usa la regla "
+            f"de luminancia de este tiempo. Verificá a ojo que local y visitante coincidan con el otro tiempo"))
+        return equipo_por_track, centros, info
+    info.update(usada=True, invertida=bool(invertir), motivo=(
+        "etiquetas tomadas del otro tiempo" + (" (invertidas respecto de la regla de luminancia)" if invertir else "")))
+    if invertir:
+        cambio = {"home": "away", "away": "home"}
+        equipo_por_track = {t: cambio[e] for t, e in equipo_por_track.items()}
+        centros = centros[[1, 0]]
+    return equipo_por_track, centros, info
+
+
+def colores_de_referencia(match_name: str, outputs_dir: Path | None = None) -> tuple[list | None, str | None]:
+    """(colores [home, away] del otro tiempo del partido, nombre de ese video) si `match_name`
+    es el 2° tiempo de un partido registrado y el 1° ya tiene equipos asignados; si no, (None, None)."""
+    from src.db import partido_repo
+    partido_repo.init_partidos_table()
+    propio, otro = partido_repo.get_tiempo(match_name), partido_repo.otro_tiempo(match_name)
+    if propio is None or otro is None or propio["tiempo"] != 2:
+        return None, None
+    ruta = (outputs_dir or _ROOT / "data" / "outputs") / f"{otro['match_name']}_coords_field.parquet"
+    if not ruta.exists():
+        return None, None
+    colores = pd.read_parquet(ruta, columns=["frame"]).attrs.get("equipos_info", {}).get("colores_cluster_rgb")
+    return (colores, otro["match_name"]) if colores and len(colores) == 2 else (None, None)
+
+
 def tracks_arquero(df: pd.DataFrame) -> set[int]:
     """Tracks cuyas filas de persona son mayormente `goalkeeper` (más de
     PROPORCION_MIN_ARQUERO). El resto de los tracks con alguna fila
@@ -467,7 +536,8 @@ def asignar_equipos(video_path, df: pd.DataFrame,
                      n_muestras: int | None = None,
                      min_muestras_track: int = MIN_MUESTRAS_TRACK,
                      muestras_por_track: int = MUESTRAS_POR_TRACK,
-                     pasto_adaptativo: bool = True) -> pd.DataFrame:
+                     pasto_adaptativo: bool = True,
+                     colores_referencia: list | None = None) -> pd.DataFrame:
     """
     Asigna equipo ("home" / "away") a cada track_id de jugador o arquero,
     a partir del color de camiseta muestreado del video.
@@ -551,8 +621,20 @@ def asignar_equipos(video_path, df: pd.DataFrame,
         cap.release()
 
     equipo_por_track, centros_cluster, orden_confiable = _asignar_por_clustering(muestras, min_muestras_track)
+    referencia_info = None
+    if colores_referencia is not None and len(centros_cluster) == 2:
+        equipo_por_track, centros_cluster, referencia_info = _aplicar_referencia(
+            equipo_por_track, centros_cluster, colores_referencia)
     n_por_color = len(equipo_por_track)
-    equipo_por_track = _asignar_arqueros(resultado, equipo_por_track, ids_arquero)
+
+    # Si los equipos cambian de lado a mitad del video (los dos tiempos en un
+    # solo archivo), la geometría de los arqueros no vale: no se asignan.
+    cambio = None
+    if "field_x" in resultado.columns:
+        provisorio = resultado.assign(team=resultado["track_id"].map(equipo_por_track))
+        cambio = detectar_cambio_de_lado(provisorio)
+    if cambio is None:
+        equipo_por_track = _asignar_arqueros(resultado, equipo_por_track, ids_arquero)
 
     # OJO: un track_id no es siempre la misma clase a lo largo del video
     # (el detector etiqueta distinto a la misma persona según el frame, y en
@@ -583,6 +665,10 @@ def asignar_equipos(video_path, df: pd.DataFrame,
         "orden_etiquetas_confiable": orden_confiable,
         # None si se usó el rango fijo (pasto_adaptativo=False o no se pudo estimar)
         "pasto_hsv": pasto,
+        # Segundo tiempo: si se usaron los colores del primero ({"usada", "delta_e", ...}) o None
+        "referencia_colores": referencia_info,
+        # Si los equipos cambian de lado dentro del video: aviso (arqueros sin asignar) o None
+        "cambio_de_lado": mensaje_cambio_de_lado(cambio) if cambio else None,
     }
     return resultado
 
@@ -606,6 +692,8 @@ Ejemplo:
     parser.add_argument("--n-muestras", type=int, default=None,
                         help="Modo anterior: muestrear este número de frames uniformes en todo el "
                              f"video en vez de muestrear por track (antes era el default, con {N_MUESTRAS_DEFAULT})")
+    parser.add_argument("--sin-referencia", action="store_true",
+                        help="En un 2° tiempo, no usar los colores del 1° como referencia")
     parser.add_argument("--pasto-fijo", action="store_true",
                         help=f"Usar el rango de pasto fijo (H {H_PASTO_MIN}-{H_PASTO_MAX}, S>{S_PASTO_MIN}) "
                              "en vez de estimarlo del video")
@@ -622,10 +710,16 @@ Ejemplo:
     df_entrada = pd.read_parquet(parquet_path)
 
     try:
+        referencia, video_referencia = (None, None) if args.sin_referencia else colores_de_referencia(
+            parquet_path.stem.replace("_coords_field", "").replace("_coords", ""), parquet_path.parent)
+        if referencia:
+            print(f"2° tiempo: se usan como referencia los colores de equipo de {video_referencia}: "
+                  f"home rgb{tuple(referencia[0])}, away rgb{tuple(referencia[1])}")
         resultado = asignar_equipos(args.video, df_entrada, n_muestras=args.n_muestras,
                                      min_muestras_track=args.min_muestras_track,
                                      muestras_por_track=args.muestras_por_track,
-                                     pasto_adaptativo=not args.pasto_fijo)
+                                     pasto_adaptativo=not args.pasto_fijo,
+                                     colores_referencia=referencia)
     except (FileNotFoundError, RuntimeError, ValueError) as e:
         sys.exit(f"[ERROR] {e}")
 
@@ -652,8 +746,14 @@ Ejemplo:
         print("   Color representativo de cada equipo (RGB) — home = camiseta más clara:")
         for i, c in enumerate(colores):
             print(f"     {('home', 'away')[i]}: rgb{c}")
-        if not info.get("orden_etiquetas_confiable", True):
+        ref = info.get("referencia_colores")
+        if ref is not None:
+            icono = "✅" if ref["usada"] else "⚠️ "
+            print(f"   {icono} Referencia del otro tiempo (ΔE {ref['delta_e']}): {ref['motivo']}")
+        if not info.get("orden_etiquetas_confiable", True) and not (ref and ref["usada"]):
             print(f"   ⚠️  Las dos camisetas tienen luminancia parecida (< {MIN_DIF_LUMINANCIA}): "
                   f"las etiquetas home/away podrían invertirse entre corridas. Verificá con los colores.")
     else:
         print("   ⚠️ No se pudo calcular el clustering (¿muy pocas muestras válidas?).")
+    if info.get("cambio_de_lado"):
+        print(f"   ⚠️  {info['cambio_de_lado']} Los arqueros quedaron sin asignar.")

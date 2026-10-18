@@ -30,6 +30,7 @@ from src.analysis.tactical_patterns import (
     asignar_lineas,
     detectar_patrones,
 )
+from src.analysis.lados import control_entre_tiempos
 from components.tagging import format_time
 from theme import TEAM_COLORS, TEAM_LABELS
 
@@ -63,6 +64,26 @@ def _calcular_patrones_cached(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]
         return pd.DataFrame(), [], [f"Error al calcular patrones: {str(e)}"]
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
+def _control_tiempos_cached(match_name: str, _df: pd.DataFrame, firma: tuple) -> dict | None:
+    """control_entre_tiempos() cacheado por partido y por la fecha de los dos
+    parquets (`firma`): si se reprocesa cualquiera de los tiempos, se recalcula."""
+    return control_entre_tiempos(match_name, _df)
+
+
+def _firma_tiempos(match_name: str) -> tuple:
+    outputs = _ROOT / "data" / "outputs"
+    rutas = sorted(outputs.glob(f"{match_name}_coords_field.parquet"))
+    try:
+        from src.db import partido_repo
+        otro = partido_repo.otro_tiempo(match_name)
+        if otro:
+            rutas += sorted(outputs.glob(f"{otro['match_name']}_coords_field.parquet"))
+    except Exception:
+        pass
+    return tuple((r.name, r.stat().st_mtime) for r in rutas)
+
+
 def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
     """Renderiza el contenido de la pestaña de Patrones Tácticos."""
     st.markdown("### ⚠️ Patrones tácticos y desajustes posicionales")
@@ -85,6 +106,21 @@ def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
             "```bash\npython3 src/analysis/team_assignment.py <video.mp4> <coords.parquet>\n```"
         )
         return
+
+    # Segundo tiempo de un partido: los equipos tienen que haber cambiado de
+    # lado respecto del primero. Si no, no se muestran patrones de este tiempo.
+    match_name = st.session_state.get("selected_match")
+    control = _control_tiempos_cached(match_name, df, _firma_tiempos(match_name)) if match_name else None
+    if control is not None:
+        texto = (f"{control['tiempo_actual']}° tiempo de «{control['partido']}» "
+                 f"(el otro: {control['otro_video']}): {control['motivo']}.")
+        if control["ok"]:
+            st.caption(f"✅ {texto}")
+        elif control["tiempo_actual"] == 2:
+            st.error(f"{texto} No se calculan patrones de este tiempo hasta resolverlo.")
+            return
+        else:
+            st.warning(texto)
 
     patrones, no_evaluados, avisos = _calcular_patrones_cached(df)
 

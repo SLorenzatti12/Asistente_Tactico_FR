@@ -147,6 +147,21 @@ from src.analysis.team_assignment import tracks_arquero  # noqa: E402
 # Las filas de tramos sin calibración válida (cámara movida) no entran en
 # fases, líneas ni candidatos a fusión: ahí los metros están corridos.
 from src.homography.tramos_validos import filtrar_tramos_no_validos  # noqa: E402
+# Un video = un tiempo: si los equipos cambian de lado a mitad del video, no
+# hay UNA dirección de ataque — se frena en vez de calcular algo mezclado.
+from src.analysis.lados import (  # noqa: E402
+    control_entre_tiempos, detectar_cambio_de_lado, mensaje_cambio_de_lado,
+)
+
+
+class CambioDeLadoError(ValueError):
+    """El video tiene a los equipos de los dos lados (probablemente los dos tiempos)."""
+
+
+def _frenar_si_cambia_de_lado(df: pd.DataFrame) -> None:
+    cambio = detectar_cambio_de_lado(df)
+    if cambio is not None:
+        raise CambioDeLadoError(mensaje_cambio_de_lado(cambio))
 
 # ── Fases de juego ───────────────────────────────────────────
 # Ventana por defecto para medir la tendencia del centroide (segundos).
@@ -480,6 +495,7 @@ def detectar_fases(df: pd.DataFrame, ventana_seg: float = VENTANA_FASE_SEG_DEFAU
     """
     _validar_columnas(df, {"frame", "time_sec", "class_name", "team", "field_x"}, "detectar_fases")
     df = filtrar_tramos_no_validos(df)
+    _frenar_si_cambia_de_lado(df)
 
     columnas_salida = ["frame", "time_sec", "team", "centroide_x", "fase"]
     vacio = pd.DataFrame(columns=columnas_salida)
@@ -589,6 +605,7 @@ def asignar_lineas(df: pd.DataFrame) -> pd.DataFrame:
     """
     _validar_columnas(df, {"frame", "track_id", "class_name", "team", "field_x"}, "asignar_lineas")
     df = filtrar_tramos_no_validos(df)
+    _frenar_si_cambia_de_lado(df)
 
     resultado = df.copy()
     resultado["linea"] = pd.Series([pd.NA] * len(resultado), index=resultado.index, dtype=object)
@@ -1229,7 +1246,19 @@ Ejemplo:
     print(f"\n🧭 Patrones tácticos — {ruta.name}")
     print("=" * 78)
 
-    fases = detectar_fases(df, ventana_seg=args.ventana_fase)
+    # Segundo tiempo de un partido: los equipos tienen que haber cambiado de lado.
+    control = control_entre_tiempos(ruta.stem.replace("_coords_field", ""), df, ruta.parent)
+    if control is not None:
+        icono = "✅" if control["ok"] else "⚠️ "
+        print(f"{icono} {control['tiempo_actual']}° tiempo de \"{control['partido']}\" "
+              f"(el otro: {control['otro_video']}): {control['motivo']}.")
+        if not control["ok"] and control["tiempo_actual"] == 2:
+            sys.exit("No se calculan patrones de este tiempo hasta resolverlo.")
+
+    try:
+        fases = detectar_fases(df, ventana_seg=args.ventana_fase)
+    except CambioDeLadoError as e:
+        sys.exit(f"[ERROR] {e}")
     print(f"Fases detectadas: {len(fases)} (frame, equipo) evaluados")
     if not fases.empty:
         print(fases["fase"].value_counts().to_string())

@@ -397,6 +397,47 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 
 **Ojo con `partido_clip2`:** si se vuelve a correr `--apply`, el análisis queda limitado a 20.3–25.5 s, porque es el único tramo con calibración válida (la cámara panea). Es lo correcto, pero cambia sus estadísticas y patrones. El parquet vigente no se tocó.
 
+## Entretiempo: un video por tiempo (18/10/2026)
+
+**Decisión:** la unidad de procesamiento sigue siendo **un video = un tiempo**. Cada tiempo tiene su parquet, su calibración, su verificación de cámara, su dirección de ataque y su asignación de equipos. La dirección de ataque **nunca se asume igual** para los dos tiempos.
+- **Tabla `partido_tiempos`** (`src/db/partido_repo.py`): agrupa los dos videos en un partido (`match_name` → `partido`, `tiempo`). Las tablas existentes (`match_team`, `match_estadio`, `events`, `semaforo`…) no cambian: siguen identificando por video.
+- **Alta:** con `scripts/partidos.py alta`, que además copia el equipo y el estadio a los dos tiempos.
+- **Dashboard:** selector de partido y, debajo, uno de tiempo. Los videos sueltos se ven como antes.
+- **No se detecta el entretiempo automáticamente** (decisión de Santi). Filmamos un archivo por tiempo. Si llega uno solo con todo, `scripts/cortar_video.py --en <minuto>` lo corta donde se indique, y el control de cambio de lado frena si alguien procesa los dos tiempos juntos.
+
+**Señal de lado** (`src/analysis/lados.py`): en cada ventana, la mediana de `field_x` de los jugadores de campo de cada equipo (por color, que es confiable). Cada equipo se para, en conjunto, más cerca de su propio arco, así que el signo de home − away dice el lado.
+- Dentro de un tiempo el signo no cambia: 100% de las ventanas de 2 min en `sportivo_crop3` (27 min) y de 5 s en `partido_clip2`, siempre a 4 m o más del cero.
+- En un video simulado con los dos tiempos (`sportivo_crop3` + una copia espejada), el signo se invierte justo en el cambio.
+- Ventanas de ≤120 s, al menos 10 por video; una ventana con |dif| < 2 m no cuenta. Un cambio tiene que sostenerse al menos 2 ventanas seguidas de cada lado.
+
+**Controles que usan esa señal:**
+- **Cambio de lado dentro de un video:** `tactical_patterns` no calcula (`CambioDeLadoError`), y `team_assignment` no asigna arqueros por geometría. Los dos explican que hay que cortar el video.
+- **Inversión entre tiempos:** si el otro tiempo ya está procesado, cada equipo tiene que haber cambiado de lado. Si no, o las etiquetas home/away se cruzaron entre tiempos, o algo salió mal (equipos o calibración). En ese caso **no se calculan patrones del 2° tiempo**: el CLI corta y la pestaña muestra el error. En el 1° tiempo solo avisa.
+
+**Colores del 1° tiempo como referencia para el 2°** (`team_assignment`): el orden home/away sale de la luminancia de la camiseta, y en el 2° tiempo la luz puede cambiar (por ejemplo, de tarde a noche). Por eso, si el 1° tiempo ya está procesado, cada cluster del 2° se empareja con el color más parecido del 1° (distancia ΔE en CIELAB).
+- Umbral **ΔE 12**: entre corridas sobre el mismo video, el color de un equipo varía 1–6; entre los dos equipos de un partido, la distancia es 29–54.
+- **Si el emparejamiento se aleja más que el umbral, avisa y no fuerza** (decisión de Santi): queda el orden por luminancia y `equipos_info["referencia_colores"]["usada"] = False`. Se desactiva con `--sin-referencia`.
+- Probado con colores iguales, invertidos y lejanos: respeta, corrige y avisa, respectivamente.
+
+**Calibración del 2° tiempo propagada desde el 1°** (`calibrate.py --desde-calibracion <video_t1>`): registra el frame calibrado del 1° tiempo contra el centro del 2° (ORB + RANSAC, el mismo método de la verificación de cámara), propaga la matriz y los puntos, y corre el control de calidad y la verificación de cámara.
+- Además informa si la cámara se movió entre los dos videos (en el entretiempo alguien puede tocar el trípode).
+- **Probado** cortando `sportivo_crop3` en 13:00 como si fueran dos tiempos. El "2° tiempo" contiene el movimiento de cámara de 19:40:
+  - 934 coincidencias de registro; el control dio **OK** (0.25 m mediano).
+  - Detectó que la cámara se movió: usar la matriz sin corregir daría 1.54 m de error mediano (2.87 m en la banda lejana).
+  - La verificación marcó como no válido 0:00–6:40.4, que en el original es 13:00–19:40.4, el movimiento ya documentado. En ese video de prueba, el frame central queda después del movimiento.
+- **Regla:** igual que para el 1° tiempo, control OK **y** mirar la imagen.
+
+**Corte sin reencodear y cantidad de frames.** `cortar_video.py` corta por defecto con *stream copy*: tarda segundos y no pierde calidad.
+- El 2° tiempo arranca en el segundo pedido: OpenCV leyó el primer frame en 780.01 s para un corte en 780.0 s.
+- Pero el contenedor arrastra los frames desde el keyframe anterior, y `CAP_PROP_FRAME_COUNT` cuenta 96 de más (20.818 contra 20.723 legibles).
+- La verificación de cámara muestreaba esos frames inexistentes y reportaba un tramo "momentáneo" falso al final del video. Ahora se cuenta el último frame legible (`_cantidad_frames`). En los videos sin cortar el resultado no cambia.
+- La barra de progreso de `run_inference` puede terminar antes del 100% en un video cortado: es solo visual.
+- Con `--exacto` reencodea (CRF 18) y corta en el segundo pedido.
+
+**Queda para otros:**
+- **Luci:** el semáforo, por partido y no por video (`docs/pendiente_luci.md`).
+- **Nico:** el sync de `partido_tiempos` a Supabase, y que `team_selector` asigne el equipo a los dos tiempos (`docs/pendiente_nico_medidas_cancha.md`).
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.
