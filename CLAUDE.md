@@ -59,6 +59,9 @@ python src/homography/calibrate.py data/videos/<clip>.mp4 --estadio "<estadio>"
 #    (o, con puntos medidos sobre la imagen en vez de clics:
 #     --puntos-archivo data/calibracion/<clip>_puntos_f<N>.json)
 python src/homography/calibrate.py data/videos/<clip>.mp4 --apply data/outputs/<clip>_coords.parquet
+
+# Rehacer el video anotado (H.264, cajas en todos los frames) desde el parquet, sin el detector
+python scripts/regenerar_video_anotado.py data/videos/<clip>.mp4 data/outputs/<clip>_coords.parquet
 ```
 
 Sync manual a la nube (Supabase) — solo con internet, nunca requerido en cancha; ver `8-base-de-datos-hibrida.md` para el setup (proyecto Supabase, `db/schema_cloud.sql`, bucket privado `match-videos`, `.env` a partir de `.env.example`):
@@ -73,7 +76,7 @@ python scripts/sync_to_cloud.py <match_name>
 `app/main.py` es el único entry point real (Santi) y actúa de orquestador: mantiene `st.session_state`, resuelve qué partido está seleccionado (`match_selector()`, busca `*_field.parquet` en `data/outputs/`) y monta en el layout las funciones que exponen los módulos de `app/components/` — cada componente es dueño de su propia lógica y estado, `main.py` no la duplica:
 
 - `map_view.py` — mapa 2D (Plotly) + panel de métricas tácticas, a partir del DataFrame `frame, time_sec, track_id, class_name, field_x, field_y[, team]`.
-- `video_sync.py` — reproductor de video custom (Custom Component v2) que expone `video.currentTime` a Python; reemplaza a `st.video()` porque ese no permite leer en qué segundo va la reproducción. Sirve el archivo vía un hardlink autogenerado en `app/static/` (gitignorado, no tocar a mano).
+- `video_sync.py` — reproductor de video custom (Custom Component v2) que expone `video.currentTime` a Python; reemplaza a `st.video()` porque ese no permite leer en qué segundo va la reproducción. Videos de hasta 200 MB: hardlink autogenerado en `app/static/` (gitignorado, no tocar a mano; ahí queda solo el del partido abierto). Más grandes: un servidor local con *range requests* que arranca solo con el dashboard (Streamlit no sirve estáticos de más de 200 MB, y desactiva todos si `app/static/` pasa 1 GB).
 - `tagging.py` — botonera de tagueo one-click, eventos, y el tab de Semáforo post-partido. Dueño de `data/db/analizador.sqlite` (`init_db()`, tablas `events`/`event_types`/`semaforo`).
 - `player_stats_view.py` — estadísticas individuales, sobre `src/analysis/player_stats.py`.
 - `team_selector.py`, `roster_view.py`, `video_registry.py` — capa de base de datos híbrida (ver abajo).

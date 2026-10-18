@@ -10,7 +10,8 @@ el Workflow de Roboflow:
     duplicado "player" cuando se superpone con un "goalkeeper")
 
 Exporta:
-  - Video anotado con bounding boxes, track IDs y clase (color por rol)
+  - Video anotado con bounding boxes, track IDs y clase (color por rol), en
+    H.264, con las cajas en todos los frames (ver video_anotado.py)
   - Archivo .parquet con coordenadas frame a frame
 
 Requiere:
@@ -31,6 +32,9 @@ import cv2
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # importable también desde otra carpeta
+from video_anotado import CLASS_COLORS, EscritorVideo, dibujar_cajas  # noqa: E402,F401 (CLASS_COLORS: compatibilidad)
 
 # ── Rutas base ─────────────────────────────────────────────
 ROOT    = Path(__file__).resolve().parents[2]
@@ -53,14 +57,6 @@ DEFAULT_CONF = 0.40  # fallback por si aparece alguna clase no mapeada
 
 # Umbral de superposición para descartar el "player" duplicado sobre un "goalkeeper"
 GOALKEEPER_OVERLAP_IOU = 0.50
-
-CLASS_COLORS = {
-    "player":     (60, 60, 220),    # rojo
-    "goalkeeper": (30, 170, 250),   # naranja
-    "referee":    (0, 210, 210),    # amarillo
-    "ball":       (255, 255, 255),  # blanco
-}
-
 
 def _lazy_imports():
     """Importa inference/supervision recién acá, con mensaje claro si faltan instalar."""
@@ -149,11 +145,14 @@ def run(video_path: Path, frame_skip: int = 2, api_key: str = None) -> Path:
     out_video_path  = OUTPUTS / f"{stem}_tracked.mp4"
     out_coords_path = OUTPUTS / f"{stem}_coords.parquet"
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (width, height))
+    writer = EscritorVideo(out_video_path, fps, width, height)
+    print(f"       Video anotado: {writer.codec}\n")
 
     records = []
     frame_idx = 0
+    # Cajas del último frame procesado: se repiten en los frames que el skip
+    # saltea, para que no parpadeen en el video anotado.
+    ultimas_cajas = []
 
     print("[3/4] Corriendo inferencia...")
     with tqdm(total=total_frames, desc="Frames", unit="fr", ncols=70) as pbar:
@@ -166,7 +165,7 @@ def run(video_path: Path, frame_skip: int = 2, api_key: str = None) -> Path:
             pbar.update(1)
 
             if frame_idx % frame_skip != 0:
-                writer.write(frame)
+                writer.escribir(dibujar_cajas(frame, ultimas_cajas))
                 continue
 
             # ── Detección ───────────────────────────────────
@@ -199,16 +198,12 @@ def run(video_path: Path, frame_skip: int = 2, api_key: str = None) -> Path:
                 class_names = list(detections.data["class_name"])
 
             # ── Dibujar anotación ───────────────────────────
-            annotated = frame.copy()
+            ultimas_cajas = []
             for i in range(len(detections)):
                 x1, y1, x2, y2 = detections.xyxy[i].astype(int)
                 tid  = int(detections.tracker_id[i]) if detections.tracker_id is not None else -1
                 name = class_names[i] if i < len(class_names) else "unknown"
-                color = CLASS_COLORS.get(name, (200, 200, 200))
-                label = f"{name} #{tid}" if tid != -1 else name
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(annotated, label, (x1, max(y1 - 6, 10)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                ultimas_cajas.append((x1, y1, x2, y2, tid, name))
 
                 # ── Guardar coordenadas ─────────────────────
                 records.append({
@@ -224,10 +219,10 @@ def run(video_path: Path, frame_skip: int = 2, api_key: str = None) -> Path:
                              if detections.confidence is not None else None,
                 })
 
-            writer.write(annotated)
+            writer.escribir(dibujar_cajas(frame, ultimas_cajas))
 
     cap.release()
-    writer.release()
+    writer.cerrar()
 
     print("\n[4/4] Exportando coordenadas...")
     df = pd.DataFrame(records)

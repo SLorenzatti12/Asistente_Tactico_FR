@@ -292,6 +292,60 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 
 **Para reproducir el caso 626 original:** la numeración de tracks corresponde al procesamiento anterior al arreglo del bug de clases. Usar `sportivo_crop3_coords_field_bug_clase.parquet` y `sportivo_crop3_tracked_bug_clase.mp4` en `data/outputs/`. En el reproceso los números de track cambian.
 
+## Partidos completos de 90 minutos: perfilado, alternativas y decisión (18/10/2026)
+
+**Perfilado sobre `sportivo_crop3`** (26.8 min, `--skip 3`), extrapolado ×3.36 a 90 min:
+
+| Etapa | 27 min (medido) | 90 min (estimado) |
+|---|---|---|
+| `run_inference` | 23.2 min · 894 MB residente (1.38 GB pico) · parquet 3 MB · video anotado 825 MB | ~78 min · ~1.2 GB · video ~2.8 GB |
+| `--apply` / `team_assignment` / `player_stats` / `tactical_patterns` | 1.3 s / 21 s / 2.3 s / 23 s (272–531 MB) | ~4 s / ~70 s / ~8 s / ~85 s |
+| Dashboard: abrir el partido la primera vez | 23.5 s (683 MB) | ~85 s |
+| Dashboard: cada actualización del mapa sincronizado | 16 ms | 21 ms (medido con 90 min simulados) |
+
+- **El video anotado no carga en el dashboard:** Streamlit devuelve 404 a los archivos estáticos de más de 200 MB, y `app/static/` estaba en ~1.02 GB. Si la carpeta pasa 1 GiB, Streamlit desactiva **todos** los estáticos al arrancar.
+- **La inferencia ya usa la GPU** (CoreML, formato MLProgram, CPU+GPU). Tarda 82 ms por frame, contra 268 ms solo en CPU. Es el 85% del tiempo: leer el video es el 4% y escribirlo el 8%. Lotes de frames y el Neural Engine no la aceleran (86–88 ms). Dos procesos a la vez rinden +17% en total.
+- **El anotado pesa 5 veces el original solo por el códec:** el anotado es mp4v (4.3 Mbps) y el original recortado es H.264 (0.86 Mbps, 165 MB). Además las cajas parpadean: con `--skip 3` solo se dibujaban en uno de cada tres frames.
+- Encontrar el frame del mapa tarda 1–3 ms de los 21 ms de cada actualización: hoy no es cuello de botella.
+
+**Alternativas evaluadas** (mejora medida cuando dice "medido"; el resto, estimado):
+
+| Opción | Mejora | Esfuerzo / riesgo | Decisión |
+|---|---|---|---|
+| a. Usar la GPU | ya la usa (medido) | — | — |
+| b. Hilos para leer/inferir/escribir | ≤15% (techo: la inferencia) | medio / bajo-medio | **descartada** |
+| c. Subir `--skip` a 5 | −35% de tiempo | muy bajo / cambia distancias y velocidades ~8–12% y obliga a rehacer líneas base (amplitud, profundidad y patrones casi iguales, medido con skip 6) | **descartada** |
+| d. RF-DETR Nano | ~1.5× según cifras de Roboflow, sin medir; peor con objetos chicos | alto / alto (reentrenar y revalidar umbrales) | después de noviembre |
+| e. Procesar solo tiempo de juego | 5–14% | medio / medio | no se hace |
+| f. Proceso nocturno que se pueda retomar | no acelera; quita el riesgo de perder 78 min | medio / bajo | **sí** (paso 4) |
+| s. Los dos tiempos en paralelo | +17% (medido) | bajo / bajo | solo si hace falta |
+| g. Video anotado en H.264, CRF 26 | 2.8 GB → ~630 MB (medido sobre 3 min); los números de track se leen | bajo / bajo | **sí** (paso 1) |
+| r. Repetir las cajas del último frame procesado en los intermedios | saca el parpadeo; atraso ≤80 ms | muy bajo / bajo | **sí** (paso 1) |
+| i. Servidor local con *range requests* | cualquier tamaño, con adelantar/retroceder; los videos grandes salen de `app/static/` | bajo-medio / medio | **sí** (paso 1) |
+| h. Cajas dibujadas en el navegador sobre el original | sin video anotado (~550 MB por partido) | alto / medio-alto | después de noviembre |
+| j. Video en segmentos (HLS) | ninguna sobre la opción i para un archivo local | medio-alto / medio | **descartada** |
+| k. Clips de jugadas tagueadas | complementa, no muestra el partido completo; toca `tagging.py` (Luci) | medio / bajo | después de noviembre (Sprint 4) |
+| l. Precalcular estadísticas y patrones al procesar | 85 s → ~2 s al abrir | bajo-medio / bajo | **sí** (paso 3, patrones primero; estadísticas anotadas para Nico) |
+| p. Guardar en disco el caché de Streamlit | instantáneo después de reiniciar | muy bajo / bajo | **sí** (paso 3) |
+| m. Bajar la frecuencia de posiciones del mapa | casi nula (21 ms por actualización) | bajo / cambia métricas | **descartada** |
+| n. Índice por frame en el mapa | 3 → 0.07 ms dentro de 21 ms | bajo / bajo, toca `map_view.py` (Nico) | baja prioridad, anotada para Nico |
+
+**Resultado del paso 1 (video), 18/10/2026:**
+- **H.264 con CRF 26 y cajas en todos los frames** (`src/detection/video_anotado.py`, usado por `run_inference.py`).
+  - `sportivo_crop3`: 825 MB → **103 MB**, un partido de 90 min ~345 MB. Es mejor que lo estimado, porque sin el parpadeo el video comprime mucho mejor.
+  - Sin costo de tiempo: `sportivo_min --skip 1` tardó 159 s, contra 157 s antes.
+  - Parquet y línea base sin cambios (131 IDs, 21/26/77).
+- **`scripts/regenerar_video_anotado.py`** rehace el video anotado desde el parquet, sin el detector: 129 s para los 27 min de `sportivo_crop3`. Da frames idénticos a los de `run_inference.py`: 0 diferencias en 1.500 frames, con skip 1 y con skip 3. El video anterior queda como `*_tracked_anterior.mp4`.
+- **`video_sync.py`:**
+  - Hasta 200 MB, el video sigue por los estáticos de Streamlit, y en `app/static/videos/` queda solo el del partido abierto (lejos del corte de 1 GB).
+  - Más grande, lo sirve un servidor local (Starlette + uvicorn, que vienen con Streamlit) en un puerto libre. Arranca solo con el dashboard y responde *range requests*: 206 con el tramo pedido, verificado con pedidos reales. Solo sirve videos registrados por la app.
+
+**Orden decidido:**
+1. Video (g + r + i), reencodeando `sportivo_crop3` sin reprocesar.
+2. Entretiempo y verificación automática de la calibración, antes de procesar el segundo tiempo.
+3. Dashboard (l + p).
+4. Robustez: retomar procesos cortados (f) y aviso de espacio en disco.
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.

@@ -23,25 +23,45 @@ soportada de lograr lo mismo.
 
 Cómo se sirve el video
 ------------------------
-El archivo vive en data/outputs/ (fuera de app/), y Streamlit solo puede
-servir estáticos desde app/static/ (con server.enableStaticServing=true
-en .streamlit/config.toml). _asegurar_video_estatico() expone el video
-ahí con un HARDLINK (mismo inodo — no duplica los ~90MB en disco) y solo
-cae a copiarlo si el filesystem no soporta hardlinks.
+El archivo vive en data/outputs/ (fuera de app/). Hay dos caminos, según
+el tamaño:
+
+- **Hasta 200 MB:** como estático de Streamlit, desde app/static/ (con
+  server.enableStaticServing=true en .streamlit/config.toml).
+  _asegurar_video_estatico() lo expone ahí con un HARDLINK (mismo inodo —
+  no duplica el video en disco) y solo cae a copiarlo si el filesystem no
+  soporta hardlinks. En app/static/videos/ queda SOLO el video del partido
+  abierto: Streamlit desactiva todos los estáticos al arrancar si la
+  carpeta pasa 1 GB, y llegó a estar en 1.02 GB juntando videos viejos.
+- **Más de 200 MB** (un partido de 90 min: ~345 MB en H.264; los 27 min
+  de sportivo_crop3 pesan 103 MB): Streamlit responde 404 ("File is too large") a los estáticos
+  más grandes que eso. Se sirven desde un servidor local propio
+  (_servidor_videos(): Starlette + uvicorn, que ya vienen con Streamlit),
+  que arranca solo la primera vez que hace falta y vive mientras viva el
+  dashboard. Responde "range requests" (pedir un tramo del archivo), que
+  es lo que usa el navegador para adelantar y retroceder sin bajar el
+  video entero. Solo sirve los videos que registra esta misma app.
 
 ⚠️ app/static/ se genera sola, en tiempo de ejecución — no es código
 fuente. Está en .gitignore: si te aparece en `git status`, es esperable,
 no hay que agregarla.
 """
 
+import hashlib
 import os
 import shutil
+import socket
+import threading
 from pathlib import Path
 
 import streamlit as st
 
 _APP_DIR = Path(__file__).resolve().parent.parent  # app/
 _STATIC_VIDEOS_DIR = _APP_DIR / "static" / "videos"
+
+# Tamaño máximo que Streamlit sirve como estático (MAX_APP_STATIC_FILE_SIZE en
+# streamlit/web/server/starlette/starlette_server_config.py): más grande → 404.
+LIMITE_ESTATICO_BYTES = 200 * 1024 * 1024
 
 # Cada cuánto el JS sondea video.currentTime y (si cambió) avisa a Python.
 # 4 Hz alcanza para que el mapa se sienta "en vivo"; 30 fps (cada frame de
@@ -97,11 +117,17 @@ export default function (component) {
   const video = parentElement.querySelector("#video-sync-el")
   if (!video) return
 
+  // Video grande: lo sirve el servidor local (otro puerto, mismo host que la
+  // página — así funciona igual si el dashboard se abre desde otra máquina
+  // de la red). Video chico: ruta relativa a los estáticos de Streamlit.
+  const nextSrc = data?.puerto
+    ? `http://${window.location.hostname}:${data.puerto}${data.ruta}`
+    : (data?.src ?? "")
+
   // Hidratación: solo se toca el <video> si la URL realmente cambió (p.ej.
   // el usuario eligió otro partido). Si se reasignara "src" en cada
   // re-render del componente —que puede pasar varias veces por segundo
   // mientras el video corre— se reiniciaría la reproducción todo el tiempo.
-  const nextSrc = data?.src ?? ""
   if (video.getAttribute("src") !== nextSrc) {
     video.setAttribute("src", nextSrc)
   }
@@ -165,6 +191,7 @@ def _asegurar_video_estatico(video_path: Path) -> str | None:
 
     _STATIC_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
     destino = _STATIC_VIDEOS_DIR / video_path.name
+    _limpiar_estaticos(dejar=destino)
 
     origen_mtime = video_path.stat().st_mtime
     if not destino.exists() or destino.stat().st_mtime != origen_mtime:
@@ -177,6 +204,69 @@ def _asegurar_video_estatico(video_path: Path) -> str | None:
         os.utime(destino, (origen_mtime, origen_mtime))
 
     return f"app/static/videos/{video_path.name}"
+
+
+def _limpiar_estaticos(dejar: Path | None = None) -> None:
+    """Saca de app/static/videos/ todos los videos menos `dejar`. Son
+    hardlinks (o copias) de data/outputs/: borrarlos no borra el original, y
+    se vuelven a crear solos al abrir ese partido."""
+    if not _STATIC_VIDEOS_DIR.exists():
+        return
+    for archivo in _STATIC_VIDEOS_DIR.iterdir():
+        if archivo.is_file() and archivo != dejar:
+            archivo.unlink()
+
+
+class _ServidorVideos:
+    """Servidor HTTP local para videos de más de LIMITE_ESTATICO_BYTES.
+
+    Escucha en un puerto libre que elige el sistema, en la misma interfaz
+    que el dashboard (server.address, o todas si no está configurada).
+    Solo responde por los archivos registrados con registrar(): la URL lleva
+    un identificador derivado de la ruta, no la ruta en sí.
+    """
+
+    def __init__(self):
+        from starlette.applications import Starlette
+        from starlette.responses import FileResponse, Response
+        from starlette.routing import Route
+        import uvicorn
+
+        self._videos: dict[str, Path] = {}
+
+        async def servir(request):
+            ruta = self._videos.get(request.path_params["clave"])
+            if ruta is None or not ruta.exists():
+                return Response("Video no registrado", status_code=404)
+            # FileResponse de Starlette responde los "Range" con 206 (tramo
+            # del archivo): es lo que permite adelantar/retroceder.
+            return FileResponse(ruta, media_type="video/mp4",
+                                headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache"})
+
+        app = Starlette(routes=[Route("/videos/{clave}/{nombre}", servir)])
+        host = st.get_option("server.address") or "0.0.0.0"
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.bind((host, 0))
+        self.puerto = self._socket.getsockname()[1]
+        servidor = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
+        hilo = threading.Thread(target=servidor.run, kwargs={"sockets": [self._socket]},
+                                name="servidor-videos", daemon=True)
+        hilo.start()
+
+    def registrar(self, video_path: Path) -> str:
+        """Devuelve la ruta URL (sin host ni puerto) con que se pide este video."""
+        video_path = Path(video_path).resolve()
+        clave = hashlib.sha1(str(video_path).encode()).hexdigest()[:16]
+        self._videos[clave] = video_path
+        return f"/videos/{clave}/{video_path.name}"
+
+
+@st.cache_resource(show_spinner=False)
+def _servidor_videos() -> _ServidorVideos:
+    """Uno solo por proceso del dashboard: cache_resource lo comparte entre
+    sesiones y sobrevive a los reruns y a la recarga de este módulo."""
+    return _ServidorVideos()
 
 
 def render_video_sincronizado(video_path: Path, key: str) -> float | None:
@@ -215,13 +305,22 @@ def render_video_sincronizado(video_path: Path, key: str) -> float | None:
         "no hay tick nuevo" porque, para lo único que le importa al caller
         (¿toco current_time o no?), es la misma respuesta: no.
     """
-    src = _asegurar_video_estatico(video_path)
-    if src is None:
+    video_path = Path(video_path)
+    if not video_path.exists():
         return None
+
+    datos = {"intervaloMs": INTERVALO_SONDEO_MS, "umbralSeg": _UMBRAL_CAMBIO_SEG}
+    if video_path.stat().st_size <= LIMITE_ESTATICO_BYTES:
+        datos["src"] = _asegurar_video_estatico(video_path)
+    else:
+        _limpiar_estaticos()
+        servidor = _servidor_videos()
+        datos["puerto"] = servidor.puerto
+        datos["ruta"] = servidor.registrar(video_path)
 
     resultado = _COMPONENT(
         key=key,
-        data={"src": src, "intervaloMs": INTERVALO_SONDEO_MS, "umbralSeg": _UMBRAL_CAMBIO_SEG},
+        data=datos,
         on_tick_change=lambda: None,
     )
     return resultado.tick
