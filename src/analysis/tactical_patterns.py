@@ -144,6 +144,9 @@ from src.analysis.player_stats import MAX_SPEED_MS  # noqa: E402
 # es arquero si la MAYORÍA de sus filas son `goalkeeper` (el detector confunde
 # jugador/arquero en detecciones sueltas).
 from src.analysis.team_assignment import tracks_arquero  # noqa: E402
+# Las filas de tramos sin calibración válida (cámara movida) no entran en
+# fases, líneas ni candidatos a fusión: ahí los metros están corridos.
+from src.homography.tramos_validos import filtrar_tramos_no_validos  # noqa: E402
 
 # ── Fases de juego ───────────────────────────────────────────
 # Ventana por defecto para medir la tendencia del centroide (segundos).
@@ -476,6 +479,7 @@ def detectar_fases(df: pd.DataFrame, ventana_seg: float = VENTANA_FASE_SEG_DEFAU
         no viene vacío.
     """
     _validar_columnas(df, {"frame", "time_sec", "class_name", "team", "field_x"}, "detectar_fases")
+    df = filtrar_tramos_no_validos(df)
 
     columnas_salida = ["frame", "time_sec", "team", "centroide_x", "fase"]
     vacio = pd.DataFrame(columns=columnas_salida)
@@ -584,6 +588,7 @@ def asignar_lineas(df: pd.DataFrame) -> pd.DataFrame:
         LIMITACIÓN CONOCIDA en el docstring del módulo.
     """
     _validar_columnas(df, {"frame", "track_id", "class_name", "team", "field_x"}, "asignar_lineas")
+    df = filtrar_tramos_no_validos(df)
 
     resultado = df.copy()
     resultado["linea"] = pd.Series([pd.NA] * len(resultado), index=resultado.index, dtype=object)
@@ -925,6 +930,7 @@ def detectar_candidatos_fusion(df: pd.DataFrame, max_gap_seg: float = MAX_GAP_FU
         "gap_seg", "distancia_m", "velocidad_necesaria_ms",
     ]
     vacio = pd.DataFrame(columns=columnas_salida)
+    df = filtrar_tramos_no_validos(df)
     if df.empty:
         return vacio
 

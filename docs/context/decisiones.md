@@ -377,7 +377,25 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 
 - `--apply` con la verificación da coordenadas idénticas a las vigentes en los dos videos: solo agrega el atributo con los tramos.
 
-**Pendiente de decidir:** qué hacer con el tramo corrido de `sportivo_crop3`. Opciones: calibrar ese tramo aparte (una segunda calibración desde las 19:45), o propagar la calibración con el corrimiento medido (ver la sección siguiente, que deja de ser solo para cámaras con paneo).
+**Decisión y resultado: calibración por tramos (18/10/2026).**
+- **El JSON de calibración admite `tramos`** (desde, hasta, matriz, frame de referencia, origen y control) **y `excluir`** (rangos descartados). Sin esas claves, todo sigue como antes.
+- **`calibrate.py --propagar-tramo DESDE`** agrega un tramo con la matriz base corregida por el corrimiento medido entre el frame calibrado y el centro del tramo: `H_tramo = H_base · G⁻¹`, con G de ORB + RANSAC. Corre el control de calidad y guarda la imagen.
+- **`--excluir DESDE HASTA --motivo ...`** descarta un rango. Las dos opciones respaldan antes la calibración (`*_homography_respaldo_<fecha>.json`).
+- **La verificación de cámara** compara cada momento contra la referencia de su propio tramo.
+- **`--apply`** usa la matriz de cada tramo y descarta las detecciones de los rangos excluidos.
+- **`player_stats` (`filter_noise`) y `tactical_patterns` (fases, líneas, candidatos a fusión) excluyen las filas de tramos que siguen sin calibración válida** (`src/homography/tramos_validos.py`), no solo las anotan. Verificado: da idéntico a recortar el parquet a mano.
+
+**Aplicado a `sportivo_crop3`:**
+- Excluidos 0:00–0:10 (cámara acomodándose) y 19:40.6–19:45.6 (mientras la movían): 1.682 detecciones.
+- Tramo propagado desde 19:45.6, con referencia en el frame 34922 (23:17), 915 coincidencias de registro.
+  - Control: **OK**, error mediano 0.22 m, igual que la base. En ese mismo frame, la matriz sin corregir daba REVISAR.
+  - Imagen revisada: la línea media y el círculo calzan.
+- Verificación de cámara: válida en todo el video, fuera de los rangos excluidos.
+- Las posiciones del tramo corregido se movieron 1.3 m de mediana (p90 2.9 m; 2 m en la banda lejana). El tramo base no cambió. Con la corrección, ninguna detección cae fuera de la cancha (antes eran 54).
+- **El patrón del track 2374 (21:06.8–21:45.7) sigue apareciendo,** casi igual: valor técnico 3.66 contra 3.69. El jugador está cerca del eje, en el borde del área izquierda (x≈19, y≈34), donde el corrimiento pesaba menos. No era un efecto de la cámara movida.
+- El parquet con una sola matriz quedó en `sportivo_crop3_coords_field_una_matriz.parquet`.
+
+**Ojo con `partido_clip2`:** si se vuelve a correr `--apply`, el análisis queda limitado a 20.3–25.5 s, porque es el único tramo con calibración válida (la cámara panea). Es lo correcto, pero cambia sus estadísticas y patrones. El parquet vigente no se tocó.
 
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 

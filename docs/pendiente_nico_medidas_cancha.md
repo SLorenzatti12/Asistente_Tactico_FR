@@ -47,3 +47,12 @@ Calcular `medidas = medidas_de_df(df)` después del `pd.read_parquet` y pasárse
 - **Elegir estadio desde la app:** un selector como `team_selector.py`, usando `src/db/estadio_repo.py` (`list_estadios`, `get_match_estadio`, `set_match_estadio`). Hoy se hace por consola: `python scripts/estadios.py asignar <partido> <estadio>`.
   - Ojo: asignar el estadio desde la app no recalcula nada. Las coordenadas cambian recién al recalibrar y volver a correr `--apply`. `--apply` ya avisa si el estadio asignado no coincide con la calibración.
 - **Sync a Supabase:** `estadios` y `match_estadio` hoy son solo locales. Si hacen falta en la nube, seguirían el patrón de `teams` / `match_team` en `src/db/sync.py` y `db/schema_cloud.sql`.
+
+## Otros pendientes (18/10/2026)
+
+- **Tramos sin calibración válida en el mapa.** `--apply` ahora deja en el parquet `df.attrs["calibracion_tramos_no_validos"]`: tramos (en segundos) donde la cámara se movió y los metros están corridos. `player_stats` y `tactical_patterns` ya los excluyen.
+  - **Qué falta:** que el mapa (`map_view.py`) no dibuje esas posiciones, o que avise ("sin calibración válida en este momento").
+  - **Cómo:** con `mascara_tramos_validos(df)` de `src/homography/tramos_validos.py`.
+  - Hoy ningún partido tiene tramos marcados (sportivo_crop3 se recalibró por tramos), así que no es urgente.
+- **`use_container_width` está deprecado** (Streamlit lo avisa en cada corrida). Hay que cambiarlo por `width="stretch"` en `roster_view.py:44` y `team_selector.py:50`.
+- **Índice por frame en el mapa** (baja prioridad, opción n del análisis de videos largos en decisiones.md): `_frame_at_time` recorre todo el DataFrame en cada actualización. Indexar los frames una vez (ordenarlos y buscarlos con `searchsorted`) lo baja de 3 ms a 0.07 ms con 90 minutos. Hoy no se nota, porque cada actualización tarda 21 ms en total.

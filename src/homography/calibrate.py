@@ -48,7 +48,10 @@ Control de calidad:
 """
 
 import argparse
+import contextlib
+import io
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -63,6 +66,7 @@ if str(ROOT) not in sys.path:
 from src.homography.medidas_cancha import (  # noqa: E402
     ANCHO_ARCO, CLAVE_ATTRS, MEDIDAS_REGLAMENTARIAS, completar_medidas, descripcion, offset_medialuna,
 )
+from src.homography.tramos_validos import CLAVE_TRAMOS_NO_VALIDOS  # noqa: E402
 
 # ── Dimensiones de cancha (metros) ─────────────────────────
 # Las reales vienen del estadio (ver medidas_cancha.py); estas son las
@@ -848,19 +852,21 @@ ESTABILIDAD_MIN_INLIERS = 30       # menos coincidencias → la imagen no es com
 ESTABILIDAD_RESOLUCION_SEG = 1.0   # precisión con que se ubica cada cambio
 # Criterio "la calibración sigue valiendo": el mismo que el control de calidad
 # (QC_ERROR_OK_M de mediana, QC_ERROR_LINEA_MAX_M de p90).
-ESTABILIDAD_VERSION = 5            # cambia si cambia el método: invalida el caché
+ESTABILIDAD_VERSION = 6            # cambia si cambia el método: invalida el caché
 
 
 class _Registrador:
     """Compara frames contra el frame calibrado y mide el error en metros que
     produce el corrimiento de la cámara si se usa la matriz fija."""
 
-    def __init__(self, cap: cv2.VideoCapture, calib: dict):
+    def __init__(self, cap: cv2.VideoCapture, calib: dict, H=None, frame: int | None = None):
+        """Por defecto, la matriz y el frame base de la calibración; con `H` y
+        `frame`, los de un tramo (ver propagar_tramo)."""
         self.cap = cap
-        self.H = np.array(calib["homography_matrix"], dtype=np.float64)
+        self.H = np.array(H if H is not None else calib["homography_matrix"], dtype=np.float64)
         medidas = completar_medidas(calib.get(CLAVE_ATTRS))
         self.orb = cv2.ORB_create(4000)
-        ref = self._leer(calib.get("frame", 0))
+        ref = self._leer(frame if frame is not None else calib.get("frame", 0))
         if ref is None:
             raise RuntimeError("No se pudo leer el frame de la calibración")
         self.k_ref, self.d_ref = self.orb.detectAndCompute(cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY), None)
@@ -877,6 +883,23 @@ class _Registrador:
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
         ok, frame = self.cap.read()
         return frame if ok else None
+
+    def homografia_a(self, idx: int):
+        """(G, inliers): homografía que lleva píxeles del frame de referencia a
+        los del frame `idx` (registro ORB + RANSAC), o (None, n) si no se pudo."""
+        frame = self._leer(idx)
+        if frame is None or self.d_ref is None:
+            return None, 0
+        k, d = self.orb.detectAndCompute(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None)
+        if d is None:
+            return None, 0
+        m = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True).match(self.d_ref, d)
+        if len(m) < ESTABILIDAD_MIN_INLIERS:
+            return None, len(m)
+        G, inl = cv2.findHomography(np.float32([self.k_ref[x.queryIdx].pt for x in m]),
+                                    np.float32([k[x.trainIdx].pt for x in m]), cv2.RANSAC, 3.0)
+        n = 0 if inl is None else int(inl.sum())
+        return (G, n) if G is not None and n >= ESTABILIDAD_MIN_INLIERS else (None, n)
 
     def medir(self, idx: int) -> dict:
         frame = self._leer(idx)
@@ -918,11 +941,29 @@ def verificar_estabilidad(video_path: Path, calib: dict,
     cap = cv2.VideoCapture(str(video_path))
     fps = cap.get(cv2.CAP_PROP_FPS)
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    reg = _Registrador(cap, calib)
+    # Cada momento se compara contra la referencia de SU tramo de calibración
+    # (calib["tramos"]); los rangos de calib["excluir"] no se evalúan.
+    registradores = {}
+
+    def _medir_en(i: int) -> dict:
+        t = i / fps
+        if _excluido(calib, t):
+            return {"estado": "excluido"}
+        tramo = _tramo_de(calib, t)
+        clave = None if tramo is None else tramo["desde"]
+        if clave not in registradores:
+            registradores[clave] = (_Registrador(cap, calib) if tramo is None else
+                                    _Registrador(cap, calib, tramo["homography_matrix"], tramo["frame"]))
+        return registradores[clave].medir(i)
+
+    class _Reg:   # misma interfaz que _Registrador para el resto de la función
+        medir = staticmethod(_medir_en)
+    reg = _Reg()
     intervalo_seg = min(intervalo_seg, (n / fps) / ESTABILIDAD_MIN_MUESTRAS) if fps else intervalo_seg
     paso = max(int(round(intervalo_seg * fps)), 1)
     # Siempre se mira también el frame calibrado: ahí la matriz vale por construcción.
-    indices = sorted(set(list(range(0, n, paso)) + [n - 1, int(calib.get("frame", 0))]))
+    indices = sorted(set(list(range(0, n, paso)) + [n - 1, int(calib.get("frame", 0))]
+                         + [int(t["frame"]) for t in calib.get("tramos", [])]))
     muestras = [{"frame": i, "t": round(i / fps, 1), **reg.medir(i)} for i in indices]
 
     # Donde dos muestras seguidas difieren, se mira segundo a segundo (no
@@ -943,7 +984,7 @@ def verificar_estabilidad(video_path: Path, calib: dict,
     duracion = round((n - 1) / fps, 1)
     tramos, actual = [], None
     for m in linea:
-        if m["estado"] != "vale":
+        if m["estado"] not in ("vale", "excluido"):
             if actual is None:
                 actual = {"desde": m["t"], "motivo": m["estado"], "obs": []}
             actual["obs"].append(m)
@@ -973,14 +1014,20 @@ def verificar_estabilidad(video_path: Path, calib: dict,
         t["error_banda_lejana_m"] = (round(float(np.median([m["error_banda_lejana_m"] or 0 for m in dentro])), 2)
                                      if dentro else None)
         t["error_pico_m"] = max((m["error_mediano_m"] for m in dentro), default=None)
-    segundos_no_vale = sum(t["hasta"] - t["desde"] for t in tramos)
-    return {"version": ESTABILIDAD_VERSION, "intervalo_seg": round(intervalo_seg, 2), "duracion_seg": duracion,
+    segundos_no_vale = sum(t["hasta"] - t["desde"] for t in tramos) + sum(
+        e["hasta"] - e["desde"] for e in calib.get("excluir", []))
+    return {"version": ESTABILIDAD_VERSION, "intervalo_seg": round(intervalo_seg, 2),
+            "excluidos": calib.get("excluir", []), "tramos_calibracion": len(calib.get("tramos", [])), "duracion_seg": duracion,
             "muestras": muestras, "cambios": cambios, "tramos_no_validos": tramos,
             "fraccion_valida": round(1 - segundos_no_vale / duracion, 3) if duracion else 1.0}
 
 
 def imprimir_estabilidad(r: dict) -> None:
     tramos = r["tramos_no_validos"]
+    if r.get("tramos_calibracion"):
+        print(f"\nCalibración en {r['tramos_calibracion'] + 1} tramos (cada uno verificado contra su propia referencia).")
+    for e in r.get("excluidos", []):
+        print(f"   Excluido del análisis: {_formato_tiempo(e['desde'])} – {_formato_tiempo(e['hasta'])} ({e.get('motivo', '')})")
     if not tramos:
         print(f"\n✅ Cámara estable: la calibración vale en todo el video ({_formato_tiempo(r['duracion_seg'])}, "
               f"mirado cada {r['intervalo_seg']:g} s).")
@@ -1011,7 +1058,9 @@ def estabilidad_de(video_path: Path, homography_path: Path, forzar: bool = False
         calib = json.load(f)
     st_video = Path(video_path).stat()
     clave = {"video": Path(video_path).name, "tamano": st_video.st_size, "mtime": st_video.st_mtime,
-             "matriz": calib["homography_matrix"], "frame": calib.get("frame", 0), "version": ESTABILIDAD_VERSION}
+             "matriz": calib["homography_matrix"], "frame": calib.get("frame", 0), "version": ESTABILIDAD_VERSION,
+             "tramos": [(t["desde"], t["hasta"], t["homography_matrix"]) for t in calib.get("tramos", [])],
+             "excluir": calib.get("excluir", [])}
     ruta = _ruta_estabilidad(homography_path)
     if ruta.exists() and not forzar:
         guardado = json.load(open(ruta))
@@ -1023,6 +1072,111 @@ def estabilidad_de(video_path: Path, homography_path: Path, forzar: bool = False
     with open(ruta, "w") as f:
         json.dump({"clave": clave, "resultado": resultado}, f, indent=1)
     return resultado
+
+
+# ── Calibración por tramos ─────────────────────────────────────
+# Cuando la cámara se mueve a mitad del video (sportivo_crop3, 19:40), la
+# matriz base deja de valer desde ahí. En vez de recalibrar a mano, se agrega
+# un TRAMO con su propia matriz: la base corregida por el corrimiento medido
+# entre el frame calibrado y un frame del tramo (H_tramo = H_base · G⁻¹, con G
+# el registro ORB + RANSAC entre los dos frames). Con la cámara fija dentro del
+# tramo, ese corrimiento es el mismo para todo el tramo. El JSON guarda:
+#     "tramos":  [{"desde", "hasta", "homography_matrix", "frame", "origen", "control_calidad"}]
+#     "excluir": [{"desde", "hasta", "motivo"}]   — rangos que se descartan
+# Sin esas claves todo funciona como antes (una sola matriz).
+
+def _tramo_de(calib: dict, t: float) -> dict | None:
+    for tramo in calib.get("tramos", []):
+        if tramo["desde"] <= t < tramo["hasta"]:
+            return tramo
+    return None
+
+
+def _excluido(calib: dict, t: float) -> bool:
+    return any(e["desde"] <= t < e["hasta"] for e in calib.get("excluir", []))
+
+
+def _segundos(texto: str) -> float:
+    """'19:45.6' o '1185.6' → segundos."""
+    texto = str(texto).strip()
+    if ":" in texto:
+        minutos, seg = texto.split(":")
+        return int(minutos) * 60 + float(seg)
+    return float(texto)
+
+
+def _guardar_calibracion_con_respaldo(homography_path: Path, calib: dict) -> None:
+    """Respalda el .json actual (con fecha y hora, sin pisar respaldos previos) y escribe el nuevo."""
+    from datetime import datetime
+    respaldo = homography_path.with_name(
+        f"{homography_path.stem}_respaldo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    shutil.copy2(homography_path, respaldo)
+    with open(homography_path, "w") as f:
+        json.dump(calib, f, indent=2)
+    print(f"Calibración actualizada: {homography_path.name} (la anterior quedó en {respaldo.name})")
+
+
+def excluir_tramo(homography_path: Path, desde: float, hasta: float, motivo: str) -> None:
+    """Agrega un rango a excluir del análisis (--apply descarta esas detecciones)."""
+    with open(homography_path) as f:
+        calib = json.load(f)
+    excluir = [e for e in calib.get("excluir", []) if not (e["desde"] == desde and e["hasta"] == hasta)]
+    excluir.append({"desde": round(desde, 1), "hasta": round(hasta, 1), "motivo": motivo})
+    calib["excluir"] = sorted(excluir, key=lambda e: e["desde"])
+    _guardar_calibracion_con_respaldo(homography_path, calib)
+    print(f"   Excluido: {_formato_tiempo(desde)} – {_formato_tiempo(hasta)} ({motivo})")
+
+
+def propagar_tramo(video_path: Path, homography_path: Path, desde: float, hasta: float | None = None,
+                   frame_ref: int | None = None) -> dict:
+    """
+    Agrega un tramo [desde, hasta) con la calibración base propagada por el
+    corrimiento de cámara medido en `frame_ref` (default: el centro del tramo).
+    Corre el control de calidad en ese frame y guarda la superposición; el
+    tramo se guarda igual (con su veredicto) — usarlo solo si el control da
+    OK Y la imagen se ve bien (regla de decisiones.md).
+    """
+    with open(homography_path) as f:
+        calib = json.load(f)
+    cap = cv2.VideoCapture(str(video_path))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    duracion = (int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) - 1) / fps
+    hasta = duracion + 1.0 if hasta is None else hasta
+    if frame_ref is None:
+        frame_ref = int(round((desde + min(hasta, duracion)) / 2 * fps))
+    reg = _Registrador(cap, calib)
+    G, inliers = reg.homografia_a(frame_ref)
+    if G is None:
+        cap.release()
+        sys.exit(f"[ERROR] No se pudo registrar el frame {frame_ref} contra el calibrado ({inliers} coincidencias): "
+                 f"la imagen cambió demasiado. Hace falta un archivo de puntos nuevo para este tramo.")
+    H_base = np.array(calib["homography_matrix"], dtype=np.float64)
+    H_tramo = H_base @ np.linalg.inv(G)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_ref)
+    ok, frame = cap.read()
+    cap.release()
+    medidas = completar_medidas(calib.get(CLAVE_ATTRS))
+    stem = homography_path.stem.replace("_homography", "")
+    png = homography_path.parent / f"{stem}_calibracion_control_tramo_{int(desde)}s.png"
+    print(f"\nTramo {_formato_tiempo(desde)} – {_formato_tiempo(min(hasta, duracion))}: calibración base propagada "
+          f"al frame {frame_ref} ({_formato_tiempo(frame_ref / fps)}), registro con {inliers} coincidencias.")
+    with contextlib.redirect_stdout(io.StringIO()):
+        control_base = control_calidad(frame, H_base, calib["real_points"],
+                                       homography_path.parent / f"{stem}_calibracion_control_tramo_{int(desde)}s_sin_propagar.png",
+                                       medidas)
+    control = control_calidad(frame, H_tramo, calib["real_points"], png, medidas)
+    print(f"Con la matriz base sin corregir, en ese frame: {control_base['veredicto'].upper()}, "
+          f"error mediano {control_base['error_mediano_m']} m")
+    imprimir_control(control)
+
+    tramos = [t for t in calib.get("tramos", []) if t["desde"] != round(desde, 1)]
+    tramos.append({"desde": round(desde, 1), "hasta": round(hasta, 1), "homography_matrix": H_tramo.tolist(),
+                   "frame": int(frame_ref),
+                   "origen": {"tipo": "propagada", "desde_frame": calib.get("frame", 0), "inliers": inliers},
+                   "control_calidad": control})
+    calib["tramos"] = sorted(tramos, key=lambda t: t["desde"])
+    _guardar_calibracion_con_respaldo(homography_path, calib)
+    return control
 
 
 def _medidas_para_calibrar(match_name: str, nombre_estadio: str | None) -> dict:
@@ -1105,8 +1259,29 @@ def apply_homography(coords_path: Path, homography_path: Path, video_path: Path 
 
     df = pd.read_parquet(coords_path)
 
+    # Rangos excluidos de la calibración (cámara apuntando a otro lado, el
+    # momento en que la movieron): esas detecciones no son del partido o no
+    # tienen matriz válida — se descartan.
+    if calib.get("excluir"):
+        excluir = pd.Series(False, index=df.index)
+        for e in calib["excluir"]:
+            excluir |= (df["time_sec"] >= e["desde"]) & (df["time_sec"] < e["hasta"])
+        if excluir.any():
+            print(f"[INFO] {int(excluir.sum())} detecciones descartadas por caer en rangos excluidos de la "
+                  f"calibración: " + ", ".join(f"{_formato_tiempo(e['desde'])}–{_formato_tiempo(e['hasta'])}"
+                                                 for e in calib["excluir"]))
+        df = df[~excluir].copy()
+
+    # Una matriz por tramo de calibración (calib["tramos"]); la base para el resto.
     points = df[["cx", "feet_y"]].to_numpy(dtype=np.float32).reshape(-1, 1, 2)
     transformed = cv2.perspectiveTransform(points, H).reshape(-1, 2)
+    for tramo in calib.get("tramos", []):
+        en_tramo = ((df["time_sec"] >= tramo["desde"]) & (df["time_sec"] < tramo["hasta"])).to_numpy()
+        if en_tramo.any():
+            H_t = np.array(tramo["homography_matrix"], dtype=np.float64)
+            transformed[en_tramo] = cv2.perspectiveTransform(points[en_tramo], H_t).reshape(-1, 2)
+            print(f"[INFO] {int(en_tramo.sum())} detecciones con la matriz del tramo "
+                  f"{_formato_tiempo(tramo['desde'])}–{_formato_tiempo(tramo['hasta'])}")
 
     df["field_x"] = transformed[:, 0].round(2)
     df["field_y"] = transformed[:, 1].round(2)
@@ -1123,7 +1298,7 @@ def apply_homography(coords_path: Path, homography_path: Path, video_path: Path 
     df_filtered = df[in_bounds].copy()
     df_filtered.attrs[CLAVE_ATTRS] = medidas
     if tramos_no_validos is not None:
-        df_filtered.attrs["calibracion_tramos_no_validos"] = tramos_no_validos
+        df_filtered.attrs[CLAVE_TRAMOS_NO_VALIDOS] = tramos_no_validos
 
     if n_out > 0:
         pct = n_out / n_total * 100
@@ -1179,6 +1354,16 @@ Ejemplos:
     parser.add_argument("--puntos-archivo", type=str, default=None,
                          help="Calibrar con los puntos de este .json en vez de clics (ver "
                               "calibrar_desde_archivo); el frame sale del archivo")
+    parser.add_argument("--propagar-tramo", type=str, default=None, metavar="DESDE",
+                         help="Agrega un tramo (desde DESDE, en m:ss o segundos) con la calibración base "
+                              "propagada por el corrimiento de cámara medido (ver propagar_tramo)")
+    parser.add_argument("--hasta", type=str, default=None,
+                         help="Con --propagar-tramo: fin del tramo (default: el final del video)")
+    parser.add_argument("--frame-referencia", type=int, default=None,
+                         help="Con --propagar-tramo: frame donde se mide el corrimiento (default: el centro del tramo)")
+    parser.add_argument("--excluir", nargs=2, default=None, metavar=("DESDE", "HASTA"),
+                         help="Excluye un rango del análisis (--apply descarta esas detecciones)")
+    parser.add_argument("--motivo", type=str, default="excluido a mano", help="Con --excluir: por qué")
     parser.add_argument("--estadio", type=str, default=None,
                          help="Al calibrar: estadio cuyas medidas usar (ver scripts/estadios.py); queda "
                               "asignado al partido. Sin esto: el estadio ya asignado o, si no hay, 105×68")
@@ -1193,7 +1378,17 @@ Ejemplos:
     if not video_path.exists():
         sys.exit(f"[ERROR] Video no encontrado: {video_path}")
 
-    if args.verificar:
+    if args.propagar_tramo or args.excluir:
+        homography_path = OUTPUTS / f"{video_path.stem}_homography.json"
+        if not homography_path.exists():
+            sys.exit(f"[ERROR] No hay calibración guardada para este video: {homography_path.name}")
+        if args.excluir:
+            excluir_tramo(homography_path, _segundos(args.excluir[0]), _segundos(args.excluir[1]), args.motivo)
+        if args.propagar_tramo:
+            propagar_tramo(video_path, homography_path, _segundos(args.propagar_tramo),
+                           _segundos(args.hasta) if args.hasta else None, args.frame_referencia)
+        imprimir_estabilidad(estabilidad_de(video_path, homography_path, forzar=True))
+    elif args.verificar:
         homography_path = OUTPUTS / f"{video_path.stem}_homography.json"
         if not homography_path.exists():
             sys.exit(f"[ERROR] No hay calibración guardada para este video: {homography_path.name}")

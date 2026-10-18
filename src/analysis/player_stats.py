@@ -35,6 +35,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from src.homography.tramos_validos import filtrar_tramos_no_validos  # noqa: E402
+
 # ── Dimensiones estándar de cancha (metros) ────────────────
 FIELD_LENGTH = 105.0
 FIELD_WIDTH  = 68.0
@@ -218,6 +223,8 @@ def filter_noise(
     Limpia el DataFrame de detecciones antes de calcular métricas.
 
     Descarta, en este orden:
+      0. Filas de tramos del video sin calibración válida (cámara movida;
+         ver src/homography/tramos_validos.py): ahí los metros están corridos.
       1. Filas sin coordenadas de cancha válidas y detecciones duplicadas.
       2. Saltos de posición que implicarían velocidades imposibles
          (> `max_speed_ms` m/s): glitches de homografía o cruces de identidad.
@@ -239,6 +246,7 @@ def filter_noise(
     if df is None or df.empty:
         return df if df is not None else pd.DataFrame()
 
+    df = filtrar_tramos_no_validos(df)
     limpio = _preparar(df)
     if limpio.empty:
         return limpio
