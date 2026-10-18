@@ -795,6 +795,7 @@ def _guardar_calibracion(video_path: Path, frame: np.ndarray, frame_idx: int, po
     print(f"\n✅ Calibración guardada en: {out_path.name}")
     print("   Podés reusarla para todos los videos grabados desde la misma cámara/posición.")
     imprimir_control(control)
+    imprimir_estabilidad(estabilidad_de(video_path, out_path, forzar=True))
     return out_path
 
 
@@ -822,7 +823,206 @@ def verificar_calibracion(video_path: Path, homography_path: Path, frame_idx: in
     print(f"\nCalibración: {homography_path.name}  (puntos: {', '.join(calib['point_names'])})  — frame {idx}")
     print(f"Cancha: {descripcion(medidas)}")
     imprimir_control(control)
+    if frame_idx is None:   # sin --frame: además, ¿la cámara se mantuvo en todo el video?
+        imprimir_estabilidad(estabilidad_de(video_path, homography_path))
     return control
+
+
+# ── ¿La cámara se movió? Estabilidad de la calibración a lo largo del video ─────
+# Una calibración vale para UNA posición de cámara. Con cámara "fija" igual se
+# mueve: en sportivo_crop3 la cámara derivó ~2 px en los primeros 19 min y a las
+# 19:30 saltó ~10 px (un golpe al trípode o un reacomodo). Con la matriz fija,
+# desde ahí el error de posición fue de 1.6–1.8 m de mediana y ~3 m en la banda
+# lejana, y el control por superposición NO lo detectaba de forma confiable (en
+# un video nocturno verifica pocas líneas y su resultado depende de cuáles se
+# ven en cada momento). Por eso esto mide directo el movimiento de la cámara:
+# registra cada momento contra el frame calibrado (ORB + RANSAC, sobre todo lo
+# que tiene textura: tribuna, carteles, líneas) y traduce ese corrimiento a
+# metros sobre una grilla de la cancha.
+ESTABILIDAD_INTERVALO_SEG = 30     # cada cuánto se mira el video (como máximo)...
+ESTABILIDAD_MIN_MUESTRAS = 60      # ...pero al menos tantas veces: en un clip de 45 s, cada 30 s
+#                                    eran 3 muestras y se perdía el único tramo válido
+ESTABILIDAD_PASO_GRILLA_M = 3.0    # grilla de la cancha sobre la que se mide el error
+ESTABILIDAD_MIN_INLIERS = 30       # menos coincidencias → la imagen no es comparable
+#                                    (cámara apuntando a otro lado, corte de plano)
+ESTABILIDAD_RESOLUCION_SEG = 1.0   # precisión con que se ubica cada cambio
+# Criterio "la calibración sigue valiendo": el mismo que el control de calidad
+# (QC_ERROR_OK_M de mediana, QC_ERROR_LINEA_MAX_M de p90).
+ESTABILIDAD_VERSION = 5            # cambia si cambia el método: invalida el caché
+
+
+class _Registrador:
+    """Compara frames contra el frame calibrado y mide el error en metros que
+    produce el corrimiento de la cámara si se usa la matriz fija."""
+
+    def __init__(self, cap: cv2.VideoCapture, calib: dict):
+        self.cap = cap
+        self.H = np.array(calib["homography_matrix"], dtype=np.float64)
+        medidas = completar_medidas(calib.get(CLAVE_ATTRS))
+        self.orb = cv2.ORB_create(4000)
+        ref = self._leer(calib.get("frame", 0))
+        if ref is None:
+            raise RuntimeError("No se pudo leer el frame de la calibración")
+        self.k_ref, self.d_ref = self.orb.detectAndCompute(cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY), None)
+        alto, ancho = ref.shape[:2]
+        gx, gy = np.meshgrid(np.arange(1, medidas["largo"], ESTABILIDAD_PASO_GRILLA_M),
+                             np.arange(1, medidas["ancho"], ESTABILIDAD_PASO_GRILLA_M))
+        campo = np.c_[gx.ravel(), gy.ravel()].astype(np.float32)
+        px = cv2.perspectiveTransform(campo.reshape(-1, 1, 2), np.linalg.inv(self.H).astype(np.float32)).reshape(-1, 2)
+        dentro = (px[:, 0] >= 0) & (px[:, 0] < ancho) & (px[:, 1] >= 0) & (px[:, 1] < alto)
+        self.campo, self.px = campo[dentro], px[dentro]
+        self.lejos = self.campo[:, 1] < medidas["ancho"] / 3
+
+    def _leer(self, idx: int):
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+        ok, frame = self.cap.read()
+        return frame if ok else None
+
+    def medir(self, idx: int) -> dict:
+        frame = self._leer(idx)
+        if frame is None or self.d_ref is None:
+            return {"estado": "sin_comparar", "inliers": 0}
+        k, d = self.orb.detectAndCompute(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None)
+        if d is None:
+            return {"estado": "sin_comparar", "inliers": 0}
+        m = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True).match(self.d_ref, d)
+        if len(m) < ESTABILIDAD_MIN_INLIERS:
+            return {"estado": "sin_comparar", "inliers": len(m)}
+        G, inl = cv2.findHomography(np.float32([self.k_ref[x.queryIdx].pt for x in m]),
+                                    np.float32([k[x.trainIdx].pt for x in m]), cv2.RANSAC, 3.0)
+        if G is None or int(inl.sum()) < ESTABILIDAD_MIN_INLIERS:
+            return {"estado": "sin_comparar", "inliers": 0 if inl is None else int(inl.sum())}
+        # Dónde aparece hoy cada punto de la cancha, y qué coordenada le daría la matriz fija.
+        px_t = cv2.perspectiveTransform(self.px.reshape(-1, 1, 2), G.astype(np.float32)).reshape(-1, 2)
+        medido = cv2.perspectiveTransform(px_t.reshape(-1, 1, 2), self.H.astype(np.float32)).reshape(-1, 2)
+        e = np.linalg.norm(medido - self.campo, axis=1)
+        mediana, p90 = float(np.median(e)), float(np.percentile(e, 90))
+        vale = mediana <= QC_ERROR_OK_M and p90 <= QC_ERROR_LINEA_MAX_M
+        return {"estado": "vale" if vale else "no_vale", "inliers": int(inl.sum()),
+                "error_mediano_m": round(mediana, 2), "error_p90_m": round(p90, 2),
+                "error_banda_lejana_m": round(float(np.median(e[self.lejos])), 2) if self.lejos.any() else None}
+
+
+def _formato_tiempo(seg: float) -> str:
+    return f"{int(seg // 60)}:{seg % 60:04.1f}"
+
+
+def verificar_estabilidad(video_path: Path, calib: dict,
+                          intervalo_seg: float = ESTABILIDAD_INTERVALO_SEG) -> dict:
+    """
+    Mira el video cada `intervalo_seg` y decide si la calibración sigue
+    valiendo ("vale" / "no_vale" / "sin_comparar"). Entre dos muestras de
+    estado distinto mira segundo a segundo, para ubicar cada cambio. Devuelve las
+    muestras y los tramos en que la matriz NO vale, con su error en metros.
+    """
+    cap = cv2.VideoCapture(str(video_path))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    reg = _Registrador(cap, calib)
+    intervalo_seg = min(intervalo_seg, (n / fps) / ESTABILIDAD_MIN_MUESTRAS) if fps else intervalo_seg
+    paso = max(int(round(intervalo_seg * fps)), 1)
+    # Siempre se mira también el frame calibrado: ahí la matriz vale por construcción.
+    indices = sorted(set(list(range(0, n, paso)) + [n - 1, int(calib.get("frame", 0))]))
+    muestras = [{"frame": i, "t": round(i / fps, 1), **reg.medir(i)} for i in indices]
+
+    # Donde dos muestras seguidas difieren, se mira segundo a segundo (no
+    # búsqueda binaria: al arrancar el video la cámara puede pasar por varios
+    # estados en pocos segundos — en sportivo_crop3, tribuna → cancha → otra vez
+    # sin comparar → cancha entre 0 y 8 s — y una bisección se queda con uno).
+    resolucion = max(int(round(ESTABILIDAD_RESOLUCION_SEG * fps)), 1)
+    finas = []
+    for a, b in zip(muestras[:-1], muestras[1:]):
+        if a["estado"] != b["estado"]:
+            finas += [{"frame": i, "t": round(i / fps, 1), **reg.medir(i)}
+                      for i in range(a["frame"] + resolucion, b["frame"], resolucion)]
+    cap.release()
+    linea = sorted(muestras + finas, key=lambda m: m["frame"])
+
+    # Tramos donde no vale: cada racha de observaciones no-"vale" (desde la
+    # primera hasta la siguiente que vuelve a valer, o el final del video).
+    duracion = round((n - 1) / fps, 1)
+    tramos, actual = [], None
+    for m in linea:
+        if m["estado"] != "vale":
+            if actual is None:
+                actual = {"desde": m["t"], "motivo": m["estado"], "obs": []}
+            actual["obs"].append(m)
+            if m["estado"] == "no_vale":
+                actual["motivo"] = "no_vale"   # si hubo movimiento medido, prima sobre "sin comparar"
+        elif actual is not None:
+            actual["hasta"] = m["t"]; tramos.append(actual); actual = None
+    if actual is not None:
+        actual["hasta"] = duracion; tramos.append(actual)
+    # Tramos separados por un solo paso "válido" son el mismo episodio (con
+    # resolución de 1 s, un frame suelto puede caer bien en medio del movimiento).
+    unidos = []
+    for t in tramos:
+        if unidos and t["desde"] - unidos[-1]["hasta"] <= ESTABILIDAD_RESOLUCION_SEG + 0.05:
+            unidos[-1]["hasta"] = t["hasta"]; unidos[-1]["obs"] += t["obs"]
+            if t["motivo"] == "no_vale":
+                unidos[-1]["motivo"] = "no_vale"
+        else:
+            unidos.append(t)
+    tramos = unidos
+    cambios = [{"t": t["desde"], "a": t["motivo"]} for t in tramos]
+    for t in tramos:
+        dentro = [m for m in t.pop("obs") if "error_mediano_m" in m]
+        # Típico del tramo (mediana de las observaciones) y pico (el peor instante,
+        # p.ej. mientras movían la cámara).
+        t["error_mediano_m"] = round(float(np.median([m["error_mediano_m"] for m in dentro])), 2) if dentro else None
+        t["error_banda_lejana_m"] = (round(float(np.median([m["error_banda_lejana_m"] or 0 for m in dentro])), 2)
+                                     if dentro else None)
+        t["error_pico_m"] = max((m["error_mediano_m"] for m in dentro), default=None)
+    segundos_no_vale = sum(t["hasta"] - t["desde"] for t in tramos)
+    return {"version": ESTABILIDAD_VERSION, "intervalo_seg": round(intervalo_seg, 2), "duracion_seg": duracion,
+            "muestras": muestras, "cambios": cambios, "tramos_no_validos": tramos,
+            "fraccion_valida": round(1 - segundos_no_vale / duracion, 3) if duracion else 1.0}
+
+
+def imprimir_estabilidad(r: dict) -> None:
+    tramos = r["tramos_no_validos"]
+    if not tramos:
+        print(f"\n✅ Cámara estable: la calibración vale en todo el video ({_formato_tiempo(r['duracion_seg'])}, "
+              f"mirado cada {r['intervalo_seg']:g} s).")
+        return
+    print(f"\n⚠️  La calibración NO vale en {len(tramos)} tramo(s) — vale en el {r['fraccion_valida']:.0%} del video:")
+    for t in tramos:
+        dur = t["hasta"] - t["desde"]
+        if t["motivo"] == "sin_comparar":
+            detalle = "la imagen no se parece al frame calibrado (cámara apuntando a otro lado o corte)"
+        else:
+            detalle = (f"cámara movida: error de posición típico {t['error_mediano_m']} m"
+                       + (f" ({t['error_banda_lejana_m']} m en la banda lejana)" if t["error_banda_lejana_m"] else "")
+                       + (f", pico {t['error_pico_m']} m" if t.get("error_pico_m") and t["error_pico_m"] > 2 * (t["error_mediano_m"] or 0) else ""))
+        breve = "  (momentáneo)" if dur < r["intervalo_seg"] else ""
+        print(f"   {_formato_tiempo(t['desde'])} – {_formato_tiempo(t['hasta'])}: {detalle}{breve}")
+    print("   Las coordenadas de esos tramos están corridas. Opciones: recalibrar ese tramo, o descartarlo del análisis.")
+
+
+def _ruta_estabilidad(homography_path: Path) -> Path:
+    return homography_path.parent / f"{homography_path.stem.replace('_homography', '')}_estabilidad_camara.json"
+
+
+def estabilidad_de(video_path: Path, homography_path: Path, forzar: bool = False) -> dict:
+    """verificar_estabilidad() con caché en <video>_estabilidad_camara.json (al
+    lado de la calibración, sin modificarla). El caché vale mientras no cambien
+    el video, la matriz ni el método."""
+    with open(homography_path) as f:
+        calib = json.load(f)
+    st_video = Path(video_path).stat()
+    clave = {"video": Path(video_path).name, "tamano": st_video.st_size, "mtime": st_video.st_mtime,
+             "matriz": calib["homography_matrix"], "frame": calib.get("frame", 0), "version": ESTABILIDAD_VERSION}
+    ruta = _ruta_estabilidad(homography_path)
+    if ruta.exists() and not forzar:
+        guardado = json.load(open(ruta))
+        if guardado.get("clave") == clave:
+            return guardado["resultado"]
+    print(f"Verificando la estabilidad de la cámara en {Path(video_path).name} "
+          f"(cada {ESTABILIDAD_INTERVALO_SEG} s)...")
+    resultado = verificar_estabilidad(video_path, calib)
+    with open(ruta, "w") as f:
+        json.dump({"clave": clave, "resultado": resultado}, f, indent=1)
+    return resultado
 
 
 def _medidas_para_calibrar(match_name: str, nombre_estadio: str | None) -> dict:
@@ -865,7 +1065,7 @@ def _avisar_si_cambio_estadio(match_name: str, medidas_calibracion: dict) -> Non
               f"calibración; para usar las nuevas, recalibrá.")
 
 
-def apply_homography(coords_path: Path, homography_path: Path) -> Path:
+def apply_homography(coords_path: Path, homography_path: Path, video_path: Path | None = None) -> Path:
     """
     Aplica una calibración guardada a un .parquet de coordenadas en píxeles,
     agregando columnas field_x, field_y en metros reales.
@@ -877,6 +1077,13 @@ def apply_homography(coords_path: Path, homography_path: Path) -> Path:
     guardó calibrate(); un .json anterior a eso → 105×68) y se guardan en el
     parquet como metadata: `df.attrs["medidas_cancha"]`, que pandas conserva
     al leer y escribir. Sin columnas nuevas — el contrato del parquet no cambia.
+
+    Antes de aplicar, verifica que la cámara no se haya movido respecto del
+    frame calibrado (verificar_estabilidad) y AVISA de los tramos en que la
+    matriz no vale; no los descarta. Quedan en
+    `df.attrs["calibracion_tramos_no_validos"]` (lista de {desde, hasta,
+    motivo, ...} en segundos) para que el análisis pueda excluirlos.
+    `video_path`: el video calibrado (default: data/videos/<video del .json>).
     """
     with open(homography_path) as f:
         calib = json.load(f)
@@ -885,6 +1092,16 @@ def apply_homography(coords_path: Path, homography_path: Path) -> Path:
     print(f"Cancha: {descripcion(medidas)}" + ("" if CLAVE_ATTRS in calib else
           "  — la calibración es anterior a las medidas por estadio"))
     _avisar_si_cambio_estadio(homography_path.stem.replace("_homography", ""), medidas)
+
+    if video_path is None:
+        video_path = ROOT / "data" / "videos" / calib.get("video", "")
+    tramos_no_validos = None
+    if Path(video_path).is_file():
+        estabilidad = estabilidad_de(video_path, homography_path)
+        imprimir_estabilidad(estabilidad)
+        tramos_no_validos = estabilidad["tramos_no_validos"]
+    else:
+        print(f"[AVISO] No encontré el video {video_path}: no se pudo verificar si la cámara se movió.")
 
     df = pd.read_parquet(coords_path)
 
@@ -905,6 +1122,8 @@ def apply_homography(coords_path: Path, homography_path: Path) -> Path:
     # Filtramos las detecciones fuera de cancha del resultado final
     df_filtered = df[in_bounds].copy()
     df_filtered.attrs[CLAVE_ATTRS] = medidas
+    if tramos_no_validos is not None:
+        df_filtered.attrs["calibracion_tramos_no_validos"] = tramos_no_validos
 
     if n_out > 0:
         pct = n_out / n_total * 100
@@ -952,7 +1171,8 @@ Ejemplos:
                               "(ver REFERENCE_POINTS en este archivo).")
     parser.add_argument("--verificar", action="store_true",
                          help="Corre el control de calidad sobre la calibración ya guardada de este "
-                              "video, sin recalibrar")
+                              "video, sin recalibrar; sin --frame, además verifica si la cámara se "
+                              "movió a lo largo de todo el video")
     parser.add_argument("--frame", type=int, default=None,
                          help="Frame sobre el cual calibrar (default: 0) o, con --verificar, sobre el "
                               "cual verificar (default: el frame con el que se calibró)")
@@ -986,7 +1206,7 @@ Ejemplos:
         if not homography_path.exists():
             sys.exit(f"[ERROR] No hay calibración guardada para este video.\n"
                       f"  Corré primero: python src/homography/calibrate.py {video_path}")
-        apply_homography(coords_path, homography_path)
+        apply_homography(coords_path, homography_path, video_path)
     else:
         point_names = args.points.split(",") if args.points else None
         if point_names:

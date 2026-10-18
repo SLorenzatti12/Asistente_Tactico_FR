@@ -346,6 +346,39 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 3. Dashboard (l + p).
 4. Robustez: retomar procesos cortados (f) y aviso de espacio en disco.
 
+## Verificación automática de la calibración a lo largo del video (18/10/2026)
+
+**Hallazgo:** la cámara "fija" de `sportivo_crop3` se movió, y la calibración vigente no vale en el **27% del video**.
+- **0:00–0:10:** la cámara todavía se estaba acomodando (apunta a la tribuna). Ahí hay ~1.200 detecciones que no son del partido.
+- **0:10–19:40:** deriva lenta, de 0 a ~2 px. El error de posición llega a ~0.8 m de mediana (1.3 m en la banda lejana): vale.
+- **19:40.6–19:44.6:** mueven la cámara (pico de 9.5 m de error).
+- **Desde las 19:45 hasta el final:** queda corrida ~10 px. Error de posición típico **1.6 m** de mediana y **3 m en la banda lejana**.
+- **Consecuencia:** las coordenadas, métricas y patrones de los últimos ~7 minutos están corridas. El caso de patrones del track 2374 (21:07–21:46) cae en ese tramo.
+
+**El control por superposición no alcanzaba para detectarlo.** En este video nocturno verifica pocas líneas y su veredicto depende de cuáles se ven en cada momento: dio REVISAR entre los minutos 10 y 18.5 (por la línea de fondo derecha, de pintura irregular) y OK después del movimiento, con la mediana empeorando apenas de 0.2 a 0.4–0.5 m.
+
+**Qué hay ahora:** `verificar_estabilidad()` en `calibrate.py`.
+- **Cómo mide:** registra cada momento del video contra el frame calibrado (ORB + RANSAC, sobre todo lo que tiene textura) y traduce ese corrimiento a error de posición en metros sobre una grilla de la cancha cada 3 m.
+- **Criterio "vale":** el mismo del control de calidad (mediana ≤ 1.0 m y p90 ≤ 2.0 m). "Sin comparar" cuando hay menos de 30 coincidencias: cámara apuntando a otro lado, o corte.
+- **Muestreo:** cada 30 s, con al menos 60 muestras por video, más el frame calibrado. Donde dos muestras difieren, mira segundo a segundo, y une los tramos separados por un solo segundo.
+- **Dónde corre:**
+  - al final de cada calibración;
+  - con `--verificar` sin `--frame`;
+  - antes de `--apply`, que **avisa y no descarta**: los tramos quedan en `df.attrs["calibracion_tramos_no_validos"]`, en segundos.
+- **Caché:** el resultado se guarda en `<video>_estabilidad_camara.json`, sin modificar la calibración. Vale mientras no cambien el video, la matriz ni el método.
+- **Tiempo:** 11 s para 27 min; ~35 s estimados para 90 min.
+
+**Verificado:**
+
+| Video | Resultado | Contraste |
+|---|---|---|
+| `sportivo_crop3` | vale en el 73%: no vale 0:00–0:10 ni 19:40.6–26:49 | barrido manual cada 30 s y cálculo de error en metros |
+| `partido_clip2` | vale en el 12%: solo 20.3–25.5 s | el control por superposición cada 0.5 s había dado OK solo entre 19.5 y 25 s |
+
+- `--apply` con la verificación da coordenadas idénticas a las vigentes en los dos videos: solo agrega el atributo con los tramos.
+
+**Pendiente de decidir:** qué hacer con el tramo corrido de `sportivo_crop3`. Opciones: calibrar ese tramo aparte (una segunda calibración desde las 19:45), o propagar la calibración con el corrimiento medido (ver la sección siguiente, que deja de ser solo para cámaras con paneo).
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.
