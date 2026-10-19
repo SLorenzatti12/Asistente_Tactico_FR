@@ -6,8 +6,17 @@ NICO — Visualización cenital de posiciones + panel de métricas tácticas.
 Recibe el DataFrame con columnas: frame, time_sec, track_id, class_name,
 field_x, field_y y (opcional) team. Lo genera src/homography/calibrate.py.
 
-Referencia de cancha: 105m (largo, eje x) x 68m (ancho, eje y),
-origen (0,0) en esquina sup-izquierda.
+Medidas de la cancha: las del parquet (df.attrs["medidas_cancha"], que
+copia calibrate.py --apply desde el estadio) vía medidas_de_df(); sin dato,
+105m (largo, eje x) x 68m (ancho, eje y). Origen (0,0) en esquina sup-izquierda.
+
+Actualización mientras corre el video: en Streamlit 1.60, st.plotly_chart
+identifica el gráfico por la figura entera, así que cada figura nueva se
+vuelve a montar desde cero (ni `key` ni `uirevision` lo evitan, y con un id
+fijo el frontend se queda con la figura vieja). Para que eso no se note: sin
+barra de herramientas (aparecía y desaparecía con el mouse encima), alto y
+rangos de ejes fijos, y el contenedor pintado del verde de la cancha, así un
+cuadro sin dibujar todavía no se ve oscuro.
 
 Color por EQUIPO (decisión de equipo). Si el parquet todavía no trae la
 columna `team`, cae automáticamente a un color distinto por track_id.
@@ -27,6 +36,8 @@ detecciones espurias) se calcula:
 """
 
 import colorsys
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -38,14 +49,21 @@ import streamlit as st
 from theme import (
     BALL_COLOR,
     FIELD_BG,
-    FIELD_LENGTH,
     FIELD_LINES,
-    FIELD_WIDTH,
     TEAM_COLORS,
     TEAM_LABELS,
     UNKNOWN_COLOR,
     plotly_layout_base,
 )
+
+# src/ es hermano de app/, no un subdirectorio — no queda en sys.path solo
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from src.homography.medidas_cancha import completar_medidas, medidas_de_df  # noqa: E402
+
+# Alto fijo del mapa (px): el mismo en cada actualización.
+MAP_HEIGHT = 420
 
 # Umbral del test de outliers de Iglewicz-Hoaglin sobre el z-score robusto.
 _MAD_Z_THRESHOLD = 3.5
@@ -174,17 +192,24 @@ def _block_metrics(players_df: pd.DataFrame) -> dict | None:
 
 
 # ── Dibujo del mapa ──────────────────────────────────────────
-def _draw_field_shapes(fig: go.Figure) -> go.Figure:
-    """Dibuja las líneas de la cancha (perímetro, mitad, círculo central)."""
-    # TODO Nico: agregar áreas grande/chica y arcos en un sprint futuro.
-    line = dict(color=FIELD_LINES, width=2)
-    fig.add_shape(type="rect", x0=0, y0=0, x1=FIELD_LENGTH, y1=FIELD_WIDTH, line=line)
-    fig.add_shape(type="line", x0=FIELD_LENGTH / 2, y0=0, x1=FIELD_LENGTH / 2, y1=FIELD_WIDTH,
-                  line=dict(color=FIELD_LINES, width=1))
-    fig.add_shape(type="circle",
-                  x0=FIELD_LENGTH / 2 - 9.15, y0=FIELD_WIDTH / 2 - 9.15,
-                  x1=FIELD_LENGTH / 2 + 9.15, y1=FIELD_WIDTH / 2 + 9.15,
-                  line=dict(color=FIELD_LINES, width=1))
+def _draw_field_shapes(fig: go.Figure, medidas: dict | None = None) -> go.Figure:
+    """
+    Líneas de la cancha como shapes del layout (perímetro, mitad, círculo
+    central, áreas grande y chica), con las medidas del estadio. Sin
+    `medidas`, la reglamentaria de 105×68 (así la llama player_stats_view.py).
+    """
+    medidas = completar_medidas(medidas)
+    L, W = medidas["largo"], medidas["ancho"]
+    r = medidas["radio_circulo"]
+    fina = dict(color=FIELD_LINES, width=1)
+    fig.add_shape(type="rect", x0=0, y0=0, x1=L, y1=W, line=dict(color=FIELD_LINES, width=2))
+    fig.add_shape(type="line", x0=L / 2, y0=0, x1=L / 2, y1=W, line=fina)
+    fig.add_shape(type="circle", x0=L / 2 - r, y0=W / 2 - r, x1=L / 2 + r, y1=W / 2 + r, line=fina)
+    for prof, ancho in ((medidas["area_grande_largo"], medidas["area_grande_ancho"]),
+                        (medidas["area_chica_largo"], medidas["area_chica_ancho"])):
+        y0, y1 = (W - ancho) / 2, (W + ancho) / 2
+        fig.add_shape(type="rect", x0=0, y0=y0, x1=prof, y1=y1, line=fina)
+        fig.add_shape(type="rect", x0=L - prof, y0=y0, x1=L, y1=y1, line=fina)
     return fig
 
 
@@ -249,10 +274,16 @@ def _add_players_by_track(fig: go.Figure, players: pd.DataFrame) -> None:
 
 
 # ── Componentes públicos (contrato con main.py) ───────────────
-def render_map(df: pd.DataFrame, current_time: float) -> None:
-    """Mapa 2D cenital con las posiciones de los jugadores en `current_time` (segundos)."""
+def render_map(df: pd.DataFrame, current_time: float, medidas: dict | None = None) -> None:
+    """
+    Mapa 2D cenital con las posiciones de los jugadores en `current_time`
+    (segundos). `medidas`: las de la cancha; None → las del parquet
+    (medidas_de_df), que sin dato son 105×68.
+    """
+    medidas = medidas or medidas_de_df(df)
+    L, W = medidas["largo"], medidas["ancho"]
     fig = go.Figure()
-    _draw_field_shapes(fig)
+    _draw_field_shapes(fig, medidas)
 
     frame_df = _frame_at_time(df, current_time)
     players = _players(frame_df)
@@ -282,32 +313,38 @@ def render_map(df: pd.DataFrame, current_time: float) -> None:
     # se ocultan del todo en una segunda llamada — acá no aplica la grilla.
     fig.update_layout(**plotly_layout_base(
         plot_bgcolor=FIELD_BG, paper_bgcolor=FIELD_BG,
-        margin=dict(l=0, r=0, t=10, b=10),
+        margin=dict(l=0, r=0, t=10, b=10), height=MAP_HEIGHT,
         legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(color=FIELD_LINES)),
         showlegend=has_team,
     ))
     fig.update_layout(
-        xaxis=dict(range=[-2, FIELD_LENGTH + 2], showgrid=False, zeroline=False, visible=False),
-        yaxis=dict(range=[-2, FIELD_WIDTH + 2], showgrid=False, zeroline=False, visible=False,
+        xaxis=dict(range=[-2, L + 2], fixedrange=True, showgrid=False, zeroline=False, visible=False),
+        yaxis=dict(range=[-2, W + 2], fixedrange=True, showgrid=False, zeroline=False, visible=False,
                    scaleanchor="x"),
     )
-    st.plotly_chart(fig, width="stretch")
+    with st.container(key="mapa_2d"):
+        # gap 0: el <style> también es un elemento (de 0 px) y si no el
+        # contenedor deja 15 px de verde entre él y el mapa.
+        st.html(f"<style>.st-key-mapa_2d {{ background: {FIELD_BG}; min-height: {MAP_HEIGHT}px; gap: 0; }}</style>")
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
 
-def _render_team_metrics(label: str, players_df: pd.DataFrame, color: str = UNKNOWN_COLOR) -> None:
+def _render_team_metrics(label: str, players_df: pd.DataFrame, color: str = UNKNOWN_COLOR,
+                         medidas: dict | None = None) -> None:
     """Una tarjeta por equipo, con el nombre en su color y las 4 métricas en grilla 2x2."""
     with st.container(border=True):
         st.markdown(
             f"<span style='color:{color}; font-weight:600; font-size:1.05rem;'>{label}</span>",
             unsafe_allow_html=True,
         )
+        medidas = medidas or medidas_de_df(players_df)
         m = _block_metrics(players_df)
         if m is None:
             st.caption("Sin datos suficientes en este instante.")
             return
         c1, c2 = st.columns(2)
-        c1.metric("Amplitud", f"{m['amplitud']:.1f} m", help="Ancho del bloque (eje lateral, 68 m).")
-        c2.metric("Profundidad", f"{m['profundidad']:.1f} m", help="Largo del bloque (eje arco-arco, 105 m).")
+        c1.metric("Amplitud", f"{m['amplitud']:.1f} m", help=f"Ancho del bloque (eje lateral, {medidas['ancho']:g} m).")
+        c2.metric("Profundidad", f"{m['profundidad']:.1f} m", help=f"Largo del bloque (eje arco-arco, {medidas['largo']:g} m).")
         c3, c4 = st.columns(2)
         c3.metric("Área ocupada", f"{m['area']:.0f} m²", help="Superficie de la envolvente convexa del bloque.")
         c4.metric("Compacidad", f"{m['dispersion']:.1f} m", help="Distancia media al centroide (menor = más junto).")
@@ -320,6 +357,7 @@ def render_metrics_panel(df: pd.DataFrame, current_time: float) -> None:
     ocupada y compacidad del bloque) en el frame más cercano a `current_time`.
     """
     st.markdown("**Métricas en vivo**")
+    medidas = medidas_de_df(df)
 
     frame_df = _frame_at_time(df, current_time)
     players = _players(frame_df)
@@ -332,12 +370,12 @@ def render_metrics_panel(df: pd.DataFrame, current_time: float) -> None:
             sub = players[players["team"] == team_key]
             if sub.empty:
                 continue
-            _render_team_metrics(TEAM_LABELS.get(team_key, team_key), sub, _team_color(team_key))
+            _render_team_metrics(TEAM_LABELS.get(team_key, team_key), sub, _team_color(team_key), medidas)
         # Jugadores sin equipo asignado (si los hubiera)
         unknown = players[~players["team"].isin(["home", "away"])]
         if not unknown.empty:
-            _render_team_metrics("⚪ Sin equipo", unknown)
+            _render_team_metrics("⚪ Sin equipo", unknown, medidas=medidas)
     else:
         # Fallback: sin columna team, se mide el conjunto completo.
-        _render_team_metrics("Bloque (todos)", players)
+        _render_team_metrics("Bloque (todos)", players, medidas=medidas)
         st.caption("⚠️ Sin columna `team` — métricas sobre todos los jugadores juntos.")

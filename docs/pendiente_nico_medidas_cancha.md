@@ -32,14 +32,16 @@ Calcular `medidas = medidas_de_df(df)` después del `pd.read_parquet` y pasárse
 ### `app/theme.py` (43-44)
 `FIELD_LENGTH` / `FIELD_WIDTH` pueden quedar, pero solo como valor por defecto si no llegan medidas. Lo mejor es que importen de `MEDIDAS_REGLAMENTARIAS`, para no tener dos fuentes de verdad.
 
-### `app/components/map_view.py`
+### `app/components/map_view.py` — **hecho el 19/10/2026** (Santi, con tu OK, para la demo)
+`render_map` y `render_metrics_panel` leen las medidas del parquet con `medidas_de_df(df)`. `render_map` acepta además `medidas=` opcional. `main.py` no necesitó cambios. Se dibujan perímetro, línea media, círculo y áreas grande y chica de los dos lados, con rangos de ejes `[-2, largo + 2]` × `[-2, ancho + 2]`. Las ayudas de Amplitud y Profundidad usan el ancho y el largo reales. `_draw_field_shapes(fig)` sin medidas sigue dibujando 105×68, para que `player_stats_view.py` no se rompa. También se sacó la barra de herramientas de Plotly del mapa (ver decisiones.md, "Mapa 2D: parpadeo…"). Lo que sigue abajo de esta sección queda como referencia de lo que se hizo.
+
 - `render_map(df, current_time)` → agregar un parámetro `medidas: dict | None = None` (None → `medidas_de_df(df)`, que cae en 105×68).
 - `_draw_field_shapes` (181-187): perímetro `largo × ancho`, línea media en `largo/2`, círculo con `radio_circulo`. Si querés dibujar las áreas, las medidas ya vienen en el mismo dict. `_lineas_cancha()` de `src/homography/calibrate.py` arma todas las marcas como polilíneas en metros y te puede servir de referencia.
 - Rango de los ejes (290-291): `[-2, largo + 2]` y `[-2, ancho + 2]`.
 - Textos de ayuda de Amplitud/Profundidad (309-310): hoy dicen "68 m" y "105 m". Usar `ancho` y `largo`, o sacar el número.
 - `render_metrics_panel`: las métricas de bloque (amplitud, profundidad, área) **no** necesitan cambios. Se calculan desde las coordenadas, que ya salen en metros reales si la calibración usó las medidas correctas.
 
-### `app/components/player_stats_view.py`
+### `app/components/player_stats_view.py` — sigue pendiente (el mapa de posiciones todavía dibuja 105×68)
 - Rango de los ejes del mapa de posiciones (241-242): igual que en `map_view`.
 - `_calcular_stats` (64-77): `infer_formation_zones` reparte en tercios del largo. Hay que pasarle `largo_cancha=medidas["largo"]`, y **agregar `largo_cancha` como parámetro de `_calcular_stats`**. `st.cache_data` arma la clave con los argumentos, no con `df.attrs`: si no, dos partidos con el mismo contenido pero distinta cancha compartirían el cálculo. El CLI de `src/analysis/player_stats.py` ya lo hace así.
 

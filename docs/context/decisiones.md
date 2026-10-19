@@ -438,6 +438,24 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 - **Luci:** el semáforo, por partido y no por video (`docs/pendiente_luci.md`).
 - **Nico:** el sync de `partido_tiempos` a Supabase, y que `team_selector` asigne el equipo a los dos tiempos (`docs/pendiente_nico_medidas_cancha.md`).
 
+## Mapa 2D: parpadeo al actualizarse y medidas de la cancha (19/10/2026)
+
+**Causa del parpadeo (verificada en el código instalado y en el navegador):** en Streamlit 1.60, `st.plotly_chart` arma el id del elemento con la **figura entera** (`plotly_spec`), aunque se le pase `key` (`key_as_main_identity=False`). El frontend usa ese id como `key` de React. Entonces, cada actualización del mapa (unas 4 por segundo con el video) **desmonta el gráfico y lo vuelve a montar desde cero**: un `<div>` vacío y Plotly dibujando recién en un `useEffect`. Si el navegador pinta antes de que Plotly termine, queda un cuadro sin mapa.
+
+**Qué no funciona en esta versión (probado):**
+- `key` fijo y `uirevision`: el gráfico se reemplazó 50 veces en 50 actualizaciones.
+- Forzar un id fijo (parche sobre `compute_and_register_element_id`): deja de volver a montarse, pero el frontend se queda con la figura del primer dibujo (`getElementState(id, "figure")`) y **los puntos no se mueven**.
+- Pasar el mapa a Vega-Lite (`st.vega_lite_chart`): con o sin `key`, los puntos no se actualizaban en el fragmento.
+- La alternativa que sí lo resuelve es un componente propio del navegador que mueva los puntos sin redibujar. Santi la descartó para esta demo.
+
+**Lo que se hizo (`map_view.py`, con el OK de Nico):**
+- Sin barra de herramientas de Plotly: con el mouse sobre el mapa aparecía y desaparecía en cada actualización.
+- Alto (420 px) y rangos de ejes fijos (`fixedrange`), con la cancha como shapes del layout.
+- Contenedor `mapa_2d` pintado del verde de la cancha: si un cuadro queda sin dibujar, se ve verde y no el fondo oscuro.
+- En el panel del navegador de la Mac de desarrollo (Chromium), cuadro a cuadro: ningún cuadro sin cancha ni sin puntos, alto constante. **El gráfico se sigue volviendo a montar en cada actualización**: no se pudo medir si en el navegador y la máquina de la demo eso se nota.
+
+**Medidas:** el mapa y las ayudas de las métricas usan `medidas_de_df(df)`: 102×75 en `sportivo_crop3` y 105×68 en `partido_clip2` (sin dato). Se dibujan perímetro, línea media, círculo y áreas grande y chica. El mapa de posiciones de `player_stats_view.py` sigue en 105×68 (pendiente de Nico).
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.
