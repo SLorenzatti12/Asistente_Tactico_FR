@@ -456,6 +456,36 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 
 **Medidas:** el mapa y las ayudas de las métricas usan `medidas_de_df(df)`: 102×75 en `sportivo_crop3` y 105×68 en `partido_clip2` (sin dato). Se dibujan perímetro, línea media, círculo y áreas grande y chica. El mapa de posiciones de `player_stats_view.py` sigue en 105×68 (pendiente de Nico).
 
+## Migración visual al mockup de Antigravity (22/10/2026)
+
+**Alcance (decisión de Santi):** se migra solo el aspecto del mockup (`mockup/`) al sistema actual: mismas vistas, datos y funciones. Quedan afuera la identidad de jugadores sobre los tracks, los dorsales, las formaciones y las severidades. El análisis de factibilidad pieza por pieza está en el artifact "Factibilidad del mockup Mesa Táctica": 28 de 30 piezas se logran sin dejar Streamlit.
+
+**Decisiones:**
+- **Solo modo oscuro**, como el mockup. Se sacó el switch claro/oscuro de `main.py`.
+- **Navegación con un selector en el encabezado** en vez de `st.tabs`. Solo se calcula y dibuja la vista elegida: con pestañas se calculaban las cuatro en cada recarga.
+- **Fuentes del sistema** en `config.toml`: Inter se descargaba de Google Fonts y sin internet no carga.
+- **Estilos atados a clases propias** (`.at-*`) o a contenedores con key (`.st-key-*`), no a `data-testid` internos de Streamlit.
+
+**Hecho (archivos de Santi):**
+- **Encabezado:** marca, píldora del partido (tiempo y medidas de la cancha), selector de vista, y el partido y el equipo dentro de un popover.
+- **Mesa táctica:** modo de visor (dividido / solo cancha / solo video), encabezados de panel y tarjetas con borde para métricas y tagueo.
+- **Patrones:** banda superior y tarjetas en grilla de dos columnas.
+- **El video sigue a los saltos.** Antes, un salto desde Patrones o desde el historial de tags movía el slider y la cancha pero no el video, y al darle play el video volvía a pisar el tiempo. Ahora `render_video_sincronizado(..., salto={"id", "t"})` lleva el video a ese segundo; el componente aplica cada id una sola vez. Se usa en cuatro casos:
+  - los saltos (además cambian la vista a Mesa táctica);
+  - mover el slider a mano;
+  - volver a mostrar el video (otra vista, otro modo del visor, otro partido), para que retome donde está la cancha.
+- **Verificado:**
+  - AppTest sin excepciones sobre `sportivo_crop3` y `partido_clip2`, en las cuatro vistas y los tres modos del visor;
+  - en el navegador, el clic en la evidencia 21:06 del track 2374 lleva a la Mesa táctica con el video en 1266.83 s.
+
+**Pendiente:**
+- **Nico:**
+  - paleta del mockup en `theme.py` (hoy conviven dos paletas: la de `theme.py` pinta los gráficos y las tarjetas de métricas);
+  - cancha estilo mockup, interruptores de envolvente y centroides, tarjetas de métricas;
+  - vista Jugadores.
+- **Luci:** botonera de tagueo y semáforo.
+- **Santi, después de la demo:** barra de transporte propia, marcas de eventos en la línea de tiempo y atajos de teclado, dentro del componente de video.
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.

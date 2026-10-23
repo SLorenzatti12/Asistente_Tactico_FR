@@ -8,8 +8,8 @@
 # EXCEPCIÓN DELIBERADA (ver más abajo): primaryColor NO coincide con
 # ACCENT_COLOR de theme.py. Está explicado en su lugar; no es un descuido.
 #
-# base = "dark" es el modo de partida. El switch claro/oscuro propio de
-# main.py se monta ENCIMA con CSS (no usa el toggle nativo de Streamlit).
+# base = "dark": la app es solo oscura, como el mockup (el switch
+# claro/oscuro de main.py se sacó el 22/10/2026).
 
 [server]
 # Sirve archivos desde app/static/ bajo la URL /app/static/<...> (con soporte
@@ -36,8 +36,12 @@ textColor = "#f0f3f6"                 # blanco frío de alta legibilidad
 linkColor = "#c3ff00"
 borderColor = "#242a35"
 
-font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
+# Fuentes del sistema, como el mockup (mockup/styles.css, --font-sans y
+# --font-mono): no dependen de internet. Antes era Inter desde Google Fonts,
+# que en una cancha sin conexión no carga y Streamlit caía a otra fuente.
+font = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
+headingFont = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
+codeFont = "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace"
 baseFontSize = 15
 linkUnderline = false
 

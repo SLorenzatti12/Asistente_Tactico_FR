@@ -134,6 +134,19 @@ export default function (component) {
     video.setAttribute("src", nextSrc)
   }
 
+  // Salto pedido desde Python ({id, t}): se aplica una vez por id. Una
+  // instancia recién montada (se volvió a la Mesa Táctica, o se cambió de
+  // partido) no tiene id guardado, así que aplica el último salto: el video
+  // retoma donde está el mapa en vez de arrancar en 0:00. Antes de que el
+  // video cargue sus metadatos, asignar currentTime no tiene efecto: se espera.
+  const salto = data?.salto
+  if (salto && parentElement._videoSyncSaltoId !== salto.id) {
+    parentElement._videoSyncSaltoId = salto.id
+    const aplicar = () => { video.currentTime = salto.t }
+    if (video.readyState >= 1) aplicar()
+    else video.addEventListener("loadedmetadata", aplicar, { once: true })
+  }
+
   // El timer se crea UNA sola vez por instancia del componente, no en cada
   // re-render (que Streamlit dispara cada vez que este mismo componente
   // llama a setTriggerValue — si se recreara el interval acá adentro,
@@ -271,7 +284,7 @@ def _servidor_videos() -> _ServidorVideos:
     return _ServidorVideos()
 
 
-def render_video_sincronizado(video_path: Path, key: str) -> float | None:
+def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = None) -> float | None:
     """
     Reproductor de video que expone su tiempo de reproducción a Python.
 
@@ -289,6 +302,9 @@ def render_video_sincronizado(video_path: Path, key: str) -> float | None:
             (p. ej. f"video_{nombre_partido}") para que cambiar de partido
             monte una instancia nueva del componente, no reutilice estado
             del video anterior.
+        salto: {"id": int, "t": segundos} — lleva el video a `t`. Se aplica
+            una sola vez por `id` (pasar el mismo dict en cada corrida no
+            vuelve a saltar), y siempre al montarse una instancia nueva.
 
     Returns:
         El segundo de reproducción que el video acaba de reportar (float),
@@ -312,6 +328,8 @@ def render_video_sincronizado(video_path: Path, key: str) -> float | None:
         return None
 
     datos = {"intervaloMs": INTERVALO_SONDEO_MS, "umbralSeg": _UMBRAL_CAMBIO_SEG}
+    if salto is not None:
+        datos["salto"] = {"id": int(salto["id"]), "t": float(salto["t"])}
     if video_path.stat().st_size <= LIMITE_ESTATICO_BYTES:
         datos["src"] = _asegurar_video_estatico(video_path)
     else:

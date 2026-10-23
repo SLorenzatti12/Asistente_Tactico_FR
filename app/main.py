@@ -11,8 +11,6 @@ layout. Cada quien puede desarrollar su módulo en paralelo — el
 Correr con:
     streamlit run app/main.py
 """
-import json
-import math
 import urllib.parse
 import streamlit as st
 import pandas as pd
@@ -44,325 +42,115 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.db import partido_repo  # noqa: E402
 
+from src.homography.medidas_cancha import medidas_de_df  # noqa: E402
+
 # Identidad visual del sistema (paleta, tipografía, CSS global)
 from theme import aplicar_estilos_globales
 
 ROOT    = Path(__file__).resolve().parent.parent
 OUTPUTS = ROOT / "data" / "outputs"
-THEME_PREF_PATH = ROOT / ".streamlit" / "ui_prefs.json"
 
 st.set_page_config(page_title="Analizador Táctico", page_icon="⚽", layout="wide")
 aplicar_estilos_globales()
 
 
-# ── Preferencia de tema (persiste en disco, no es "por usuario") ────
-def _load_theme_pref() -> str:
-    if THEME_PREF_PATH.exists():
-        try:
-            return json.loads(THEME_PREF_PATH.read_text(encoding="utf-8")).get("theme", "dark")
-        except json.JSONDecodeError:
-            pass
-    return "dark"
-
-
-def _save_theme_pref(mode: str) -> None:
-    THEME_PREF_PATH.parent.mkdir(parents=True, exist_ok=True)
-    THEME_PREF_PATH.write_text(json.dumps({"theme": mode}), encoding="utf-8")
-
-
-# ── CSS del modo claro ───────────────────────────────────────
-# El tema base de Streamlit (config.toml) queda fijo en oscuro; esto
-# encima simula modo claro con CSS. Apoyado sobre todo en las variables
-# --st-* (el puente documentado que Streamlit expone para que el CSS
-# cruce hacia sus propios componentes), más selectores genéricos como
-# red de contención — no pude confirmar en un navegador real que cubra
-# el 100% de los widgets, así que puede necesitar un ajuste después de
-# verlo.
-_LIGHT_MODE_CSS = """
+# ── Identidad visual del mockup (mockup/styles.css) ─────────────
+# Solo modo oscuro, como el mockup (el switch claro/oscuro se sacó el
+# 22/10/2026). Los colores base (fondo, texto, lima) los pone
+# .streamlit/config.toml; acá van los tokens de superficies, bordes y
+# etiquetas que el tema nativo no tiene. Los estilos se atan a clases
+# propias (.at-*) o a contenedores con key (.st-key-*), no a data-testid
+# internos de Streamlit, que cambian entre versiones.
+_ESTILOS_MOCKUP = """
 <style>
 :root {
-    --st-background-color: #ffffff;
-    --st-secondary-background-color: #f6f8fa;
-    --st-text-color: #1f2328;
-    --st-heading-color: #1f2328;
-    --st-border-color: #d0d7de;
-    --st-widget-border-color: #d0d7de;
-    --st-code-background-color: #f6f8fa;
-    --st-code-text-color: #1f2328;
+  --at-surface-1: #121519;
+  --at-surface-2: #181c22;
+  --at-border: #242a35;
+  --at-text-1: #f0f3f6;
+  --at-text-2: #9aa4b2;
+  --at-text-3: #626c7a;
+  --at-lime: #c3ff00;
+  --at-lime-dim: rgba(195, 255, 0, 0.15);
+  --at-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
-body, .stApp,
-[data-testid="stAppViewContainer"], [data-testid="stHeader"],
-[data-testid="stMain"], [data-testid="stBottomBlockContainer"] {
-    background-color: #ffffff !important;
-    color: #1f2328 !important;
+.st-key-app_header {
+  background: var(--at-surface-1);
+  border: 1px solid var(--at-border);
+  border-radius: 12px;
+  padding: 10px 16px;
 }
-[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stDialog"] {
-    background-color: #f6f8fa !important;
-    border-color: #d0d7de !important;
+.at-brand { display: flex; align-items: center; gap: 12px; }
+.at-brand-icon {
+  width: 36px; height: 36px; flex: 0 0 36px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--at-lime-dim); color: var(--at-lime);
 }
-/* Ojo: NO tocar `span`/`div` acá — pisaría con !important el
-   <span style="color:..."> que ya usamos para pintar Local/Visitante
-   en las tarjetas de métricas. Tampoco `button` en general — pisaría
-   el texto blanco de los botones primarios (verdes) de los modales. */
-p, label, h1, h2, h3, h4, h5, h6 {
-    color: #1f2328 !important;
+.at-brand-title { font-weight: 800; font-size: 0.95rem; letter-spacing: 0.12em; color: var(--at-text-1); line-height: 1.25; }
+.at-brand-sub { font-size: 0.6rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--at-text-3); white-space: nowrap; }
+.at-match-pill {
+  display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--at-surface-2); border: 1px solid var(--at-border);
+  border-radius: 999px; padding: 6px 14px; font-size: 0.82rem; color: var(--at-text-1);
 }
-/* theme.py (Santi) pinta las tarjetas de métrica con colores oscuros fijos
-   (BG_SECONDARY / BORDER_COLOR), pensadas para el modo oscuro único que él
-   había planteado. Como acá se conserva el switch claro/oscuro, en claro hay
-   que revertirlas o quedan tarjetas negras sobre fondo blanco. Su CSS no usa
-   !important, así que alcanza con esto. */
-[data-testid="stMetric"] {
-    background-color: #f6f8fa !important;
-    border-color: #d0d7de !important;
+.at-match-pill .at-name { font-weight: 700; }
+.at-match-pill .at-meta { font-family: var(--at-mono); font-size: 0.72rem; color: var(--at-text-2); }
+.at-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.at-panel-tag { font-family: var(--at-mono); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--at-text-2); }
+.at-pill {
+  font-family: var(--at-mono); font-size: 0.66rem; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--at-border); color: var(--at-text-2); white-space: nowrap;
 }
 </style>
 """
 
+# Ícono de la marca: el del mockup (mockup/index.html, .brand-icon). Va como
+# imagen data: y no como <svg> en línea porque st.html descarta los SVG.
+_ICONO_MARCA = "data:image/svg+xml," + urllib.parse.quote(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" '
+    'stroke="#c3ff00" stroke-width="2"><circle cx="12" cy="12" r="10"/>'
+    '<path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>'
+)
 
-def _inject_theme_css(mode: str) -> None:
-    # Siempre se emite un bloque <style> (vacío en oscuro) en vez de no emitir
-    # nada: así este elemento SIEMPRE existe en la misma posición del árbol y
-    # Streamlit lo reemplaza al volver a correr. Si no se emitiera nada en
-    # oscuro, un <style> de modo claro de una corrida anterior podría quedar
-    # colgado en el DOM y seguir pintando la página de claro.
-    st.markdown(_LIGHT_MODE_CSS if mode == "light" else "<style></style>", unsafe_allow_html=True)
-
-
-# ── Switch custom claro/oscuro (pelota deslizante) ──────────────
-# SVG en vez de emoji ⚽: se ve nítido a cualquier tamaño/DPI, en vez de
-# depender de la fuente de emoji del sistema operativo (que en Windows
-# suele quedar borrosa/pixelada a tamaños chicos).
-#
-# El patrón clásico (pentágono central + 5 satélites, unidos por costuras)
-# se genera por trigonometría en vez de coordenadas tipeadas a mano, para
-# no arriesgar un dibujo asimétrico o mal proporcionado. Se verificó
-# visualmente (renderizado con matplotlib, incluso reducido a 48x48) antes
-# de dejarlo en el código — ver el patrón de "estrella" que reemplaza.
-def _polygon_points(cx: float, cy: float, radius: float, sides: int, rotation_deg: float = -90) -> str:
-    pts = []
-    for i in range(sides):
-        angle = math.radians(rotation_deg + i * (360 / sides))
-        pts.append(f"{cx + radius * math.cos(angle):.2f},{cy + radius * math.sin(angle):.2f}")
-    return " ".join(pts)
-
-
-def _build_football_svg() -> str:
-    """
-    Pentágono central + 5 satélites, SIN las costuras finas de la primera
-    versión y con satélites más grandes — a tamaño real (24px, el que
-    ocupa dentro del switch) las costuras se perdían por completo y los
-    satélites chicos se veían como manchas en vez de pentágonos. Se
-    probaron 3 variantes a 24px reales (con costuras finas, esta versión
-    "en negrita", y una sin satélites) antes de elegir esta.
-    """
-    cx, cy = 12, 12
-    outer_r = 11
-    center_pent_r = 5.0
-    satellite_r = 8.0
-    satellite_size = 3.2
-
-    parts = [f'<circle cx="{cx}" cy="{cy}" r="{outer_r}" fill="white" stroke="black" stroke-width="1"/>']
-    parts.append(f'<polygon points="{_polygon_points(cx, cy, center_pent_r, 5)}" fill="black"/>')
-
-    for i in range(5):
-        # Cada satélite se alinea con el punto medio entre dos vértices
-        # consecutivos del pentágono central (offset de 36°), pegado a una
-        # arista en vez de a un vértice — así se lee como panel vecino, no
-        # como rayo (el bug del diseño original).
-        angle_deg = -90 + 36 + i * 72
-        angle = math.radians(angle_deg)
-        sx, sy = cx + satellite_r * math.cos(angle), cy + satellite_r * math.sin(angle)
-        parts.append(f'<polygon points="{_polygon_points(sx, sy, satellite_size, 5, rotation_deg=angle_deg + 180)}" fill="black"/>')
-
-    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">{"".join(parts)}</svg>'
-
-
-_BALL_SVG = _build_football_svg()
-_BALL_DATA_URI = "data:image/svg+xml," + urllib.parse.quote(_BALL_SVG)
-
-
-def _theme_switch_css(mode: str, animate: bool) -> str:
-    """
-    Reestiliza el st.button real (dentro de st.container(key="theme_switch"))
-    para que parezca un switch sol/luna — acá pelota, sin sol ni luna, sin
-    texto. La posición/gradiente se recalculan en Python; el `transition` de
-    CSS es lo que anima el cambio entre un valor y el siguiente cuando
-    Streamlit vuelve a pintar el botón.
-
-    IMPORTANTE — el switch muestra el tema AL QUE CAMBIA, no el actual: si la
-    página está en oscuro, se ve naranja/sol ("tocá para ir a claro"). Es la
-    convención habitual de los toggles de tema y es lo que se eligió. Todo el
-    visual (gradiente Y posición de la pelota) sale de `target_mode`, un solo
-    lugar — si saliera en parte de `mode` y en parte de su opuesto, volvería a
-    aparecer el tipo de desincronización que se reportó tres veces.
-
-    `animate=False` en el primer pintado de cada sesión (ver render_theme_switch):
-    el navegador podría pintar el botón una fracción de segundo antes de que
-    llegue el <style> inyectado (va por WebSocket, no en el HTML inicial) — si
-    eso pasa, la transition animaría desde un estado por-default.
-    """
-    target_mode = "light" if mode == "dark" else "dark"
-    targets_light = target_mode == "light"
-    track_gradient = (
-        "linear-gradient(135deg, #fb923c, #f472b6)" if targets_light
-        else "linear-gradient(135deg, #0f172a, #1e3a8a)"
-    )
-    ball_left = "29px" if targets_light else "3px"
-    ball_rotate = "360deg" if targets_light else "0deg"
-    track_transition = "transition: background 0.35s ease !important;" if animate else ""
-    ball_transition = (
-        "transition: left 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), transform 0.35s ease !important;"
-        if animate else ""
-    )
-
-    return f"""
-    <style>
-    .st-key-theme_switch button {{
-        position: relative !important;
-        width: 56px !important;
-        height: 30px !important;
-        min-width: 56px !important;
-        min-height: 30px !important;
-        padding: 0 !important;
-        border: none !important;
-        border-radius: 999px !important;
-        background: {track_gradient} !important;
-        box-shadow: inset 0 1px 3px rgba(0,0,0,0.3) !important;
-        {track_transition}
-        cursor: pointer !important;
-    }}
-    /* El label queda vacío, pero por las dudas ocultamos cualquier texto
-       residual que Streamlit envuelva adentro del botón. */
-    .st-key-theme_switch button p,
-    .st-key-theme_switch button div {{
-        display: none !important;
-    }}
-    .st-key-theme_switch button::after {{
-        content: "" !important;
-        position: absolute !important;
-        top: 3px !important;
-        left: {ball_left} !important;
-        width: 24px !important;
-        height: 24px !important;
-        border-radius: 50% !important;
-        background-color: white !important;
-        background-image: url("{_BALL_DATA_URI}") !important;
-        background-size: cover !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.4) !important;
-        transform: rotate({ball_rotate}) !important;
-        {ball_transition}
-    }}
-    </style>
-    """
-
-
-def render_theme_switch() -> None:
-    """Botón real de Streamlit, reestilizado con CSS como switch de pelota."""
-    with st.container(key="theme_switch"):
-        # El click se procesa ANTES de calcular el CSS — este era el bug
-        # real (confirmado con AppTest: en la misma corrida donde se
-        # clickea, session_state ya pasaba a "light" pero el CSS emitido
-        # seguía siendo el de "dark", porque se armaba con el valor viejo
-        # antes de llegar a este `if`). Con el click primero, el CSS de
-        # esta misma corrida ya usa el modo actualizado.
-        if st.button("", key="_theme_switch_btn"):
-            new_mode = "light" if st.session_state["theme_mode"] == "dark" else "dark"
-            st.session_state["theme_mode"] = new_mode
-            _save_theme_pref(new_mode)
-
-        # Sin transición en el primer pintado de la sesión (ver docstring
-        # de _theme_switch_css) — se activa recién después, para los
-        # cambios que el usuario haga clickeando.
-        animate = st.session_state.get("_theme_switch_painted", False)
-        st.session_state["_theme_switch_painted"] = True
-        st.markdown(_theme_switch_css(st.session_state["theme_mode"], animate), unsafe_allow_html=True)
-
-
-# ── Encabezado tipo marcador de estadio ─────────────────────────
-# La banda se mantiene oscura en los DOS temas, a propósito: es un
-# marcador, no una superficie de la página. Eso además la deja fuera de
-# la pelea de especificidad con el CSS de modo claro (que pinta de claro
-# todo stVerticalBlockBorderWrapper y de oscuro todos los h1/p) — por eso
-# los selectores de acá llevan una clase extra: `.st-key-app_header h1`
-# (0,1,1) le gana a `h1` (0,0,1) aunque los dos usen !important.
-#
-# El data-testid del contenedor es `stVerticalBlock`, NO
-# `stVerticalBlockBorderWrapper`: verificado leyendo el DOM real con
-# Playwright (en 1.63 el border-wrapper no envuelve a este elemento). Con
-# el testid equivocado el selector no matchea nada y la banda no se pinta.
-_HEADER_CSS = f"""
-<style>
-[data-testid="stVerticalBlock"].st-key-app_header {{
-    background: linear-gradient(135deg, #0b1220 0%, #131f33 100%) !important;
-    border: 1px solid #1f2d44 !important;
-    border-radius: 10px !important;
-    padding: 14px 20px !important;
-    margin-bottom: 6px !important;
-}}
-.st-key-app_header [data-testid="stHorizontalBlock"] {{
-    align-items: center !important;
-}}
-.st-key-app_header .scoreboard {{
-    display: flex;
-    align-items: center;
-    gap: 16px;
-}}
-.st-key-app_header .scoreboard-ball {{
-    width: 44px;
-    height: 44px;
-    flex: 0 0 44px;
-    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
-}}
-.st-key-app_header h1.scoreboard-title {{
-    color: #ffffff !important;
-    font-size: 1.7rem !important;
-    font-weight: 800 !important;
-    letter-spacing: 0.18em !important;
-    line-height: 1.1 !important;
-    margin: 0 0 6px 0 !important;
-    padding: 0 !important;
-    text-transform: uppercase;
-}}
-.st-key-app_header .scoreboard-rule {{
-    width: 92px;
-    height: 3px;
-    border-radius: 2px;
-    background: linear-gradient(90deg, #c3ff00, rgba(195,255,0,0));
-    margin-bottom: 7px;
-}}
-.st-key-app_header .scoreboard-sub {{
-    color: #8ba0bd !important;
-    font-size: 0.68rem !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.13em !important;
-    text-transform: uppercase;
-    margin: 0 !important;
-}}
-</style>
-"""
-
-_HEADER_HTML = f"""
-<div class="scoreboard">
-    <img class="scoreboard-ball" src="{_BALL_DATA_URI}" alt=""/>
-    <div>
-        <h1 class="scoreboard-title">Analizador Táctico</h1>
-        <div class="scoreboard-rule"></div>
-        <div class="scoreboard-sub">Liga de San Francisco · Análisis post-partido</div>
-    </div>
+_HTML_MARCA = f"""
+<div class="at-brand">
+  <div class="at-brand-icon"><img src="{_ICONO_MARCA}" width="20" height="20" alt=""/></div>
+  <div>
+    <div class="at-brand-title">ANALIZADOR TÁCTICO</div>
+    <div class="at-brand-sub">Liga San Francisco · Post-partido</div>
+  </div>
 </div>
 """
 
+# Vistas de la app: solo se calcula y dibuja la elegida (con st.tabs se
+# calculaban las cuatro en cada recarga aunque se viera una).
+VISTAS = {
+    "analisis": ":material/videocam: Mesa táctica",
+    "jugadores": ":material/directions_run: Jugadores",
+    "patrones": ":material/warning: Patrones",
+    "semaforo": ":material/traffic: Semáforo",
+}
 
-def render_app_header() -> None:
-    """Banda de encabezado + switch de tema, alineados en la misma fila."""
-    st.markdown(_HEADER_CSS, unsafe_allow_html=True)
-    with st.container(key="app_header"):
-        col_title, col_theme = st.columns([6, 1])
-        with col_title:
-            st.markdown(_HEADER_HTML, unsafe_allow_html=True)
-        with col_theme:
-            render_theme_switch()
+
+def _html_partido(match: dict, medidas: dict) -> str:
+    nombre = match["partido"] or match["name"]
+    tiempo = f"{match['tiempo']}° tiempo" if match["tiempo"] else "video suelto"
+    meta = f"{tiempo} · cancha {medidas['largo']:g} × {medidas['ancho']:g} m"
+    return (f'<div class="at-match-pill"><span class="at-name">{nombre}</span>'
+            f'<span class="at-meta">{meta}</span></div>')
+
+
+def _html_panel(titulo: str, *pills: str) -> str:
+    extra = "".join(f'<span class="at-pill">{p}</span>' for p in pills)
+    return f'<div class="at-panel-head"><span class="at-panel-tag">{titulo}</span><span>{extra}</span></div>'
+
+
+# ── Saltos del video ────────────────────────────────────────────
+def _pedir_salto(t: float) -> None:
+    """Lleva el video a `t` en la próxima corrida (ver `salto` en
+    render_video_sincronizado): el componente aplica cada id una sola vez."""
+    anterior = st.session_state.get("_salto") or {"id": 0}
+    st.session_state["_salto"] = {"id": anterior["id"] + 1, "t": float(t)}
 
 
 # ── Estado inicial de la sesión ─────────────────────────────
@@ -372,7 +160,8 @@ def init_state():
         "playing": False,
         "selected_match": None,  # nombre del partido/video seleccionado
         "events": [],            # lista de tags: [{"type":..., "time":...}]
-        "theme_mode": _load_theme_pref(),  # "dark" / "light", persistido en disco
+        "vista": "analisis",     # vista elegida en el encabezado (ver VISTAS)
+        "modo_visor": "dividido",  # Mesa táctica: dividido / cancha / video
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -402,12 +191,7 @@ def match_selector() -> dict | None:
     """
     field_files = list(OUTPUTS.glob("*_field.parquet")) if OUTPUTS.exists() else []
     if not field_files:
-        st.warning(
-            "No hay partidos procesados todavía. Corré primero:\n\n"
-            "```\npython src/detection/run_inference.py <video>\n"
-            "python src/homography/calibrate.py <video> --apply <coords.parquet>\n```"
-        )
-        return None
+        return None     # main() avisa: este selector vive dentro de un popover
 
     parquets = {f.stem.replace("_coords_field", ""): f for f in field_files}
     partido_repo.init_partidos_table()
@@ -418,7 +202,7 @@ def match_selector() -> dict | None:
     opciones = ([("partido", nombre) for nombre in sorted(partidos)]
                 + [("video", nombre) for nombre in sorted(parquets) if nombre not in agrupados])
 
-    # Label oculto: el contenedor que lo envuelve (en main()) ya dice "Partido".
+    # Label oculto: el popover que lo envuelve (en main()) ya dice "Partido".
     tipo, elegido = st.selectbox("Partido", opciones, format_func=lambda o: o[1],
                                  label_visibility="collapsed", key="partido_elegido")
     if tipo == "video":
@@ -427,9 +211,7 @@ def match_selector() -> dict | None:
     tiempos = {t["tiempo"]: t["match_name"] for t in partidos[elegido]}
     etiquetas = {1: "1° tiempo", 2: "2° tiempo"}
     tiempo = st.segmented_control("Tiempo", list(tiempos), format_func=etiquetas.get,
-                                  default=min(tiempos), key=f"tiempo_elegido_{elegido}")
-    if tiempo is None:          # se deseleccionó el botón activo
-        tiempo = min(tiempos)
+                                  default=min(tiempos), required=True, key=f"tiempo_elegido_{elegido}")
     faltan = [etiquetas[t] for t in (1, 2) if t not in tiempos]
     if faltan:
         st.caption(f"Sin procesar todavía: {', '.join(faltan)}.")
@@ -438,42 +220,74 @@ def match_selector() -> dict | None:
 
 
 # ── Video sincronizado + slider manual + mapa + métricas ─────
+_MODOS_VISOR = {
+    "dividido": ":material/splitscreen_left: Dividido",
+    "cancha": ":material/sports_soccer: Solo cancha",
+    "video": ":material/videocam: Solo video",
+}
+
+
 @st.fragment
-def _panel_sincronizado(df: pd.DataFrame, match: dict, col_video, col_metricas) -> None:
+def _panel_sincronizado(df: pd.DataFrame, match: dict, col_visor, col_metricas) -> None:
     """
     Video + slider manual + mapa 2D + métricas, en un mismo st.fragment:
     mientras el video reproduce, components/video_sync.py actualiza
     `current_time` en session_state varias veces por segundo, y SOLO este
-    bloque se vuelve a dibujar — no toda la pestaña, no las otras. Por eso
-    el mapa y las métricas tienen que vivir en el MISMO fragmento que el
-    video: un cambio de session_state hecho por otro fragmento no le llega
-    (cada fragmento solo se re-ejecuta por sus propios triggers).
+    bloque se vuelve a dibujar — no toda la vista. Por eso el mapa y las
+    métricas tienen que vivir en el MISMO fragmento que el video: un cambio
+    de session_state hecho por otro fragmento no le llega (cada fragmento
+    solo se re-ejecuta por sus propios triggers).
+
+    El modo del visor (dividido / solo cancha / solo video) también vive
+    acá: cambiarlo redibuja solo este bloque.
 
     El tagueo (Luci) queda deliberadamente afuera de este fragmento — lo
     sigue escribiendo main() en col_metricas, después de esta llamada.
     """
-    with col_video:
-        if not match["tracked_video"].exists():
+    with col_visor:
+        modo = st.segmented_control(
+            "Modo del visor", list(_MODOS_VISOR), format_func=_MODOS_VISOR.get,
+            required=True, key="modo_visor", label_visibility="collapsed",
+        )
+        hay_video = match["tracked_video"].exists()
+        mostrar_video = hay_video and modo in ("dividido", "video")
+        mostrar_cancha = modo in ("dividido", "cancha") or not hay_video
+        if not hay_video:
             st.info("Video anotado no encontrado — mostrando solo el mapa.")
+        if mostrar_video and mostrar_cancha:
+            panel_video, panel_cancha = st.columns(2)
         else:
-            # None salvo en la corrida exacta en que el video reportó un
-            # tiempo nuevo (ver el docstring de render_video_sincronizado
-            # para el porqué) — por eso alcanza con "si no es None, lo
-            # piso"; cualquier otra corrida deja current_time como está,
-            # que es lo que hace que el slider manual no se pelee con esto.
-            # Tiene que ir ANTES de crear el slider de abajo — Streamlit no
-            # deja tocar session_state[key] después de instanciado el
-            # widget con ese key en la misma corrida.
-            tick = render_video_sincronizado(
-                match["tracked_video"], key=f"video_{match['name']}"
-            )
-            if tick is not None:
-                st.session_state["current_time"] = tick
+            panel_video = panel_cancha = st.container()
 
         duracion = float(df["time_sec"].max()) if not df.empty else 60.0
         # Clamp: session_state["current_time"] persiste entre partidos, y el
         # slider tira error si su value queda por encima del max de este.
         st.session_state["current_time"] = min(st.session_state["current_time"], duracion)
+
+        # El componente de video se vuelve a montar cada vez que reaparece
+        # (otra vista, otro modo del visor, otro partido) y arrancaría en
+        # 0:00: se le pide que retome donde está el mapa.
+        if mostrar_video and not st.session_state.get("_video_visible"):
+            _pedir_salto(st.session_state["current_time"])
+        st.session_state["_video_visible"] = mostrar_video
+
+        if mostrar_video:
+            with panel_video:
+                st.html(_html_panel("Cámara · video anotado", "RF-DETR + ByteTrack"))
+                # None salvo en la corrida exacta en que el video reportó un
+                # tiempo nuevo (ver el docstring de render_video_sincronizado
+                # para el porqué) — por eso alcanza con "si no es None, lo
+                # piso"; cualquier otra corrida deja current_time como está,
+                # que es lo que hace que el slider manual no se pelee con esto.
+                # Tiene que ir ANTES de crear el slider de abajo — Streamlit no
+                # deja tocar session_state[key] después de instanciado el
+                # widget con ese key en la misma corrida.
+                tick = render_video_sincronizado(
+                    match["tracked_video"], key=f"video_{match['name']}",
+                    salto=st.session_state.get("_salto"),
+                )
+                if tick is not None:
+                    st.session_state["current_time"] = tick
 
         # st.slider no tiene un `format` que pueda producir mm:ss para NINGUNO
         # de los tres números que dibuja (valor actual, mínimo, máximo): solo
@@ -495,6 +309,7 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, col_video, col_metricas) 
                label_visibility="collapsed": el ícono de ayuda (help=) cuelga
                del label nativo, así que colapsarlo se lo lleva puesto. */
             .st-key-time_slider label p {
+                font-family: var(--at-mono) !important;
                 font-size: 1.05rem !important;
                 font-weight: 700 !important;
                 letter-spacing: 0.01em !important;
@@ -505,7 +320,8 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, col_video, col_metricas) 
             .st-key-time_slider .slider-bounds {
                 display: flex;
                 justify-content: space-between;
-                font-size: 0.78rem;
+                font-family: var(--at-mono);
+                font-size: 0.75rem;
                 opacity: 0.65;
                 margin-top: -6px;
             }
@@ -514,12 +330,14 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, col_video, col_metricas) 
             unsafe_allow_html=True,
         )
         with st.container(key="time_slider"):
+            # Al moverlo a mano, el video lo sigue (como la barra del mockup).
             st.slider(
-                f"Minuto actual — {format_time(st.session_state['current_time'])}",
+                f"{format_time(st.session_state['current_time'])} / {format_time(duracion)}",
                 min_value=0.0, max_value=duracion, step=0.1,
                 key="current_time",
-                help="Control manual — útil para análisis cuadro a cuadro. "
-                     "Mientras el video reproduce, se sincroniza solo con él.",
+                on_change=lambda: _pedir_salto(st.session_state["current_time"]),
+                help="Mové la barra para ir a otro momento: el video y la cancha la siguen. "
+                     "Mientras el video reproduce, la barra se sincroniza sola con él.",
             )
             st.markdown(
                 f'<div class="slider-bounds"><span>{format_time(0.0)}</span>'
@@ -527,70 +345,94 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, col_video, col_metricas) 
                 unsafe_allow_html=True,
             )
 
-        render_map(df, current_time=st.session_state["current_time"])
+        if mostrar_cancha:
+            with panel_cancha:
+                medidas = medidas_de_df(df)
+                st.html(_html_panel(f"Cancha cenital {medidas['largo']:g} × {medidas['ancho']:g} m"))
+                render_map(df, current_time=st.session_state["current_time"], medidas=medidas)
 
     with col_metricas:
-        render_metrics_panel(df, current_time=st.session_state["current_time"])
+        with st.container(border=True, key="panel_metricas"):
+            render_metrics_panel(df, current_time=st.session_state["current_time"])
 
 
 # ── App principal ─────────────────────────────────────────
 def main():
     init_state()
     init_db()
+    st.html(_ESTILOS_MOCKUP)
 
-    # Si se clickeó un evento en el timeline de tagging.py, el salto de
-    # tiempo queda pendiente en esta clave intermedia — Streamlit no deja
-    # reasignar session_state["current_time"] una vez que el slider (más
-    # abajo, dentro de _panel_sincronizado) ya se instanció en la misma
-    # corrida, así que se aplica acá, antes de crear el slider.
+    # Si se clickeó un evento en el timeline de tagging.py, o la evidencia de
+    # un patrón, el salto de tiempo queda pendiente en esta clave intermedia —
+    # Streamlit no deja reasignar session_state["current_time"] una vez que el
+    # slider (más abajo, dentro de _panel_sincronizado) ya se instanció en la
+    # misma corrida, así que se aplica acá, antes de crear el slider. El salto
+    # lleva a la Mesa táctica y mueve también el video.
     if st.session_state.get("_pending_seek_time") is not None:
-        st.session_state["current_time"] = st.session_state.pop("_pending_seek_time")
+        t = st.session_state.pop("_pending_seek_time")
+        st.session_state["current_time"] = t
+        st.session_state["vista"] = "analisis"
+        _pedir_salto(t)
 
-    render_app_header()
+    # ── Encabezado: marca, partido, navegación y cambio de partido ──
+    with st.container(key="app_header"):
+        col_marca, col_partido, col_nav, col_cambiar = st.columns(
+            [2.7, 2.4, 4.7, 1.2], vertical_alignment="center")
+        # El popover va primero en el código (no en pantalla): el partido que
+        # se elige ahí es el que muestra la píldora del medio.
+        with col_cambiar:
+            with st.popover("Partido", icon=":material/swap_horiz:", width="stretch"):
+                match = match_selector()
+                if match is not None:
+                    render_team_selector(match["name"])
+                    render_video_registry(match["name"], default_path=match["video_path"])
+        with col_marca:
+            st.html(_HTML_MARCA)
+        with col_nav:
+            vista = st.segmented_control(
+                "Vista", list(VISTAS), format_func=VISTAS.get, required=True,
+                key="vista", label_visibility="collapsed",
+            )
 
-    _inject_theme_css(st.session_state["theme_mode"])
-
-    with st.container(border=True):
-        st.markdown("##### 📁 Partido")
-        match = match_selector()
-        if match is not None:
-            render_team_selector(match["name"])
-            render_video_registry(match["name"], default_path=match["video_path"])
     if match is None:
+        st.warning(
+            "No hay partidos procesados todavía. Corré primero:\n\n"
+            "```\npython src/detection/run_inference.py <video>\n"
+            "python src/homography/calibrate.py <video> --apply <coords.parquet>\n```"
+        )
         return
 
+    if match["name"] != st.session_state.get("selected_match"):
+        st.session_state["_video_visible"] = False   # otro partido: video nuevo
     st.session_state["selected_match"] = match["name"]
 
     df = pd.read_parquet(match["field_parquet"])
+    with col_partido:
+        st.html(_html_partido(match, medidas_de_df(df)))
 
-    tab_live, tab_jugadores, tab_patrones, tab_semaforo = st.tabs(
-        ["📊 Análisis", "🏃 Jugadores", "⚠️ Patrones tácticos", "🚦 Semáforo post-partido"]
-    )
-
-    with tab_live:
-        col_video, col_side = st.columns([2, 1])
+    # Solo se calcula y dibuja la vista elegida.
+    if vista != "analisis":
+        st.session_state["_video_visible"] = False
+    if vista == "analisis":
+        col_visor, col_lado = st.columns([2.3, 1], gap="medium")
 
         # ── Video sincronizado + mapa (Nico) + métricas (Nico) ──
-        _panel_sincronizado(df, match, col_video, col_side)
+        _panel_sincronizado(df, match, col_visor, col_lado)
 
-        with col_side:
-            st.divider()
+        with col_lado:
             # ── Tagueo one-click (Luci) ────────────────
-            render_tagging_panel()
-
-    with tab_jugadores:
+            with st.container(border=True, key="panel_tagueo"):
+                render_tagging_panel()
+    elif vista == "jugadores":
         # ── Estadísticas individuales por jugador ──
         render_player_stats(df)
-
-    with tab_patrones:
+    elif vista == "patrones":
         # ── Patrones tácticos detectados ──
         render_tactical_patterns_tab(df)
-
-    with tab_semaforo:
+    else:
         # ── Semáforo (Luci) ────────────────────────────
         render_semaforo_tab(match["name"])
 
 
 if __name__ == "__main__":
     main()
-

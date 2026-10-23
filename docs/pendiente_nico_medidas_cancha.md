@@ -68,3 +68,29 @@ Cada tiempo se filma, procesa y analiza como un video propio, con su `match_name
   - sincronizarla en `src/db/sync.py`, con el mismo patrón que `match_team`;
   - decidir si `matches` en la nube pasa a ser por partido, con sus dos videos colgando, o si sigue por video con una columna `partido`/`tiempo`. Los eventos y el tracking siguen siendo por video: sus tiempos son relativos a cada video.
 - **`team_selector.py`.** Hoy asigna el equipo a un solo video. Si se cambia desde la app para un tiempo, el otro queda con el anterior. Lo ideal es que, si el video pertenece a un partido (`partido_repo.get_tiempo(match_name)`), asigne a los dos (`partido_repo.tiempos_de(partido)`).
+
+## Migración visual al mockup (22/10/2026)
+
+Santi pasó su parte (`main.py`, `config.toml`, `tactical_patterns_view.py`, `video_sync.py`). Ver decisiones.md, "Migración visual al mockup". Lo que falta en tus archivos:
+
+- **`theme.py`: la paleta quedó desfasada** (lo más importante). Sigue con fondo `#0e1117` y acento ámbar `#b45309`, y `config.toml` usa la del mockup. Los gráficos Plotly y las tarjetas de métricas salen de `theme.py`, así que hoy conviven dos paletas. Valores del mockup (`mockup/styles.css`):
+  - fondo `#0a0b0d`;
+  - superficies `#121519` / `#181c22`;
+  - bordes `#242a35`;
+  - texto `#f0f3f6` / `#9aa4b2`;
+  - acento lima `#c3ff00`.
+
+  `FONT_FAMILY` debería pasar a la pila del sistema que ahora usa `config.toml`: Inter se bajaba de Google Fonts y sin internet no carga.
+- **`map_view.py`, cancha estilo mockup:**
+  - césped oscuro a franjas (`#163622` / `#1a3f28`);
+  - medialunas, puntos de penal y arcos de esquina;
+  - flechas de dirección de ataque.
+
+  `main.py` ya le pasa `medidas=` a `render_map` y dibuja el encabezado "Cancha cenital L × W m" arriba del mapa.
+- **`map_view.py`, interruptores de envolvente y centroides:** dos parámetros nuevos en `render_map` (por ejemplo `mostrar_bloques=True`, `mostrar_centroides=True`). Los interruptores los pongo yo en `main.py`.
+- **`map_view.py`, tarjetas de métricas:** el panel ya va dentro de una tarjeta con borde (`st.container(key="panel_metricas")`). Falta, por equipo, el encabezado en su color y las barras con `st.progress`.
+- **`player_stats_view.py` (etapa 6):**
+  - filtros por equipo y línea en píldoras;
+  - tarjetas de totales;
+  - `st.dataframe` con `column_config` (barras);
+  - ficha lateral al seleccionar una fila.

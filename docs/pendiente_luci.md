@@ -18,3 +18,15 @@ Anotados por Santi. `tagging.py` es tuyo: no se tocó.
 ## `use_container_width` deprecado
 
 Streamlit lo avisa en cada corrida y lo va a sacar. Hay que cambiarlo por `width="stretch"`: en `tagging.py` aparece en las líneas 516, 554, 575, 578, 589, 592, 616, 623, 638 y 642.
+
+## Migración visual al mockup (22/10/2026)
+
+Santi pasó su parte (`main.py`, `config.toml`, `tactical_patterns_view.py`, `video_sync.py`). Ver decisiones.md, "Migración visual al mockup".
+
+- **El modo claro se sacó.** `session_state["theme_mode"]` ya no existe. `tagging.py` lo lee con `"dark"` por defecto, así que no se rompió nada, pero la rama `"light"` de `_CHART_STYLE` (línea ~377) quedó sin uso y se puede borrar.
+- **Ya no hay pestañas: hay un selector de vista arriba**, y solo se dibuja la vista elegida. `_request_seek()` sigue funcionando igual. Ahora, además, cualquier salto (`_pending_seek_time`) lleva a la Mesa táctica y **mueve también el video**: antes movía solo el slider y la cancha.
+- **El tagueo ya va dentro de una tarjeta con borde** (`st.container(key="panel_tagueo")`, en `main.py`). Para que se vea como el mockup (análisis, etapa 4):
+  - botonera en grilla de 2 columnas con `st.button(icon=…)`;
+  - selector de equipo con `st.segmented_control`;
+  - historial como lista compacta.
+- **Semáforo (etapa 5):** fila de contadores (destacados / regulares / bajos) con `st.metric`, y grilla de tarjetas por jugador del plantel con los tres estados como botones. Opcionales: notas por jugador e informe para copiar a WhatsApp.

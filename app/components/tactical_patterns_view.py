@@ -1,7 +1,7 @@
 """
 Analizador Táctico — Vista de Patrones Tácticos Detectados
 ============================================================
-Pestaña "⚠️ Patrones tácticos": consume src/analysis/tactical_patterns.py
+Vista "Patrones" del encabezado: consume src/analysis/tactical_patterns.py
 para el dashboard. Presenta cada caso como "momento para revisar", con
 redacción orientada al DT, desglose técnico y botones de timestamp para
 revisar la jugada exacta en el video. La severidad solo ORDENA la lista y
@@ -15,6 +15,7 @@ Metodología:
   nunca como diagnósticos definitivos.
 """
 
+import html
 import sys
 from pathlib import Path
 import pandas as pd
@@ -84,19 +85,78 @@ def _firma_tiempos(match_name: str) -> tuple:
     return tuple((r.name, r.stat().st_mtime) for r in rutas)
 
 
-def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
-    """Renderiza el contenido de la pestaña de Patrones Tácticos."""
-    st.markdown("### ⚠️ Patrones tácticos y desajustes posicionales")
+# Estilo del mockup (mockup/styles.css: .patrones-hero-banner, .pattern-card).
+# Usa los tokens --at-* que define main.py; los colores de equipo salen de
+# theme.TEAM_COLORS. Atado a clases propias y a los contenedores con key
+# "patron_*", no a data-testid internos de Streamlit.
+_ESTILOS = """
+<style>
+.at-hero { background: var(--at-surface-1, #121519); border: 1px solid var(--at-border, #242a35);
+           border-radius: 12px; padding: 18px 22px; display: flex; flex-direction: column; gap: 6px; }
+.at-hero h2 { font-size: 1.05rem; letter-spacing: 0.08em; margin: 0; padding: 0; }
+.at-hero p { color: var(--at-text-2, #9aa4b2); font-size: 0.9rem; margin: 0; max-width: 90ch; }
+.at-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.at-card-type { font-family: var(--at-mono, monospace); font-size: 0.7rem; color: var(--at-text-2, #9aa4b2); }
+.at-card-team { font-size: 0.75rem; font-weight: 700; padding: 2px 10px; border-radius: 999px; border: 1px solid; }
+.at-card-title { font-size: 1.05rem; font-weight: 700; margin: 2px 0 0; }
+.at-card-track { font-family: var(--at-mono, monospace); font-size: 0.75rem; color: var(--at-text-3, #626c7a); }
+.at-card-text { font-size: 0.9rem; color: var(--at-text-1, #f0f3f6); }
+.at-card-box { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 16px;
+               background: var(--at-surface-2, #181c22); border: 1px solid var(--at-border, #242a35);
+               border-radius: 8px; padding: 10px 12px; }
+.at-card-box .k { font-size: 0.68rem; color: var(--at-text-3, #626c7a); text-transform: uppercase; letter-spacing: 0.06em; }
+.at-card-box .v { font-family: var(--at-mono, monospace); font-size: 0.85rem; color: var(--at-text-1, #f0f3f6); }
+.at-card-ev { font-size: 0.72rem; color: var(--at-text-3, #626c7a); text-transform: uppercase; letter-spacing: 0.06em; }
+</style>
+"""
 
-    # Banner metodológico para el cuerpo técnico
-    st.info(
-        "💡 **Nota para el cuerpo técnico:** Estas señales surgen de desviaciones "
-        "geométricas estadísticas respecto a la línea de compañeros — **no son diagnósticos definitivos**. "
-        "Un jugador despegado de su línea puede estar ejecutando un desmarque para recibir, "
-        "una marca personal sobre un rival o una basculación correcta. "
-        "Revisá siempre la jugada en video antes de sacar conclusiones.",
-        icon="📋",
-    )
+_HERO = """
+<div class="at-hero">
+  <h2>MOMENTOS PARA REVISAR</h2>
+  <p>Señales que surgen de desviaciones geométricas respecto a la línea de compañeros:
+  <strong>no son diagnósticos definitivos</strong>. Un jugador despegado de su línea puede estar
+  desmarcándose para recibir, haciendo una marca personal o basculando bien. Revisá siempre la
+  jugada en video antes de sacar conclusiones.</p>
+</div>
+"""
+
+
+def _html_tarjeta(row, titulo: str, team_label: str, team_color: str) -> str:
+    """Parte fija de la tarjeta de un patrón (sin los botones, que son widgets)."""
+    valores = []
+    if row["patron"] == "desconectado":
+        exceso_pct = int((row["valor_tecnico"] - 1.0) * 100) if row["valor_tecnico"] > 1.0 else 0
+        valores.append(("Desvío sobre su línea", f"+{exceso_pct}%"))
+    elif row["patron"] == "no_achica":
+        valores.append(("Déficit de avance", f"{row['valor_tecnico']} m"))
+    valores.append(("Ocurrencias", f"{row['n_ocurrencias']}"))
+    # La severidad solo ordena la lista (ver decisiones.md): va como dato técnico.
+    valores.append(("Orden (severidad)", f"{row['severidad']:.2f}"))
+    candidatos = row.get("posible_mismo_jugador_que", [])
+    if candidatos:
+        valores.append(("Posible mismo jugador", ", ".join(f"track {c}" for c in candidatos)))
+    caja = "".join(f'<div><div class="k">{k}</div><div class="v">{v}</div></div>' for k, v in valores)
+    return f"""
+<div class="at-card-head">
+  <span class="at-card-type">Para revisar · <code>{row['patron']}</code></span>
+  <span class="at-card-team" style="color:{team_color}; border-color:{team_color}">{team_label}</span>
+</div>
+<div class="at-card-title">{html.escape(titulo)}</div>
+<div class="at-card-track">Track #{row['track_id']}</div>
+<div class="at-card-text">{html.escape(str(row['descripcion']))}</div>
+<div class="at-card-box">{caja}</div>
+"""
+
+
+def _ir_a(t: float) -> None:
+    """Pide el salto a la Mesa táctica (main.py aplica `_pending_seek_time`)."""
+    st.session_state["_pending_seek_time"] = float(t)
+
+
+def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
+    """Renderiza el contenido de la vista de Patrones Tácticos."""
+    st.html(_ESTILOS)
+    st.html(_HERO)
 
     if "team" not in df.columns or df["team"].dropna().empty:
         st.warning(
@@ -161,62 +221,30 @@ def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
                     st.markdown(f"- {item}")
         return
 
-    # Renderizar tarjetas
-    st.markdown(f"**Momentos para revisar ({len(df_filtrado)}):**")
+    # Tarjetas en grilla de dos columnas, ordenadas de más a menos señal
+    st.markdown(f"**Momentos para revisar ({len(df_filtrado)})**")
 
-    for _, row in df_filtrado.iterrows():
-        team_key = row["team"]
-        team_label = TEAM_LABELS.get(team_key, team_key)
-        team_color = TEAM_COLORS.get(team_key, "#ffffff")
-        titulo_patron = PATRON_TITULOS.get(row["patron"], row["patron"])
-
-        with st.container(border=True):
-            col_header, col_team = st.columns([3, 1])
-            with col_header:
-                st.markdown(
-                    f"**🔎 Para revisar** · `{row['patron']}` — "
-                    f"**Track #{row['track_id']}**",
-                )
-                st.markdown(f"#### {titulo_patron}")
-            with col_team:
-                st.markdown(
-                    f"<div style='text-align: right; color: {team_color}; font-weight: 700;'>"
-                    f"{team_label}</div>",
-                    unsafe_allow_html=True,
-                )
-
-            st.write(row["descripcion"])
-
-            # Métricas técnicas de soporte
-            c_val, c_ocurr, c_sev, c_fusion = st.columns([1, 1, 1, 2])
-            if row["patron"] == "desconectado":
-                exceso_pct = int((row["valor_tecnico"] - 1.0) * 100) if row["valor_tecnico"] > 1.0 else 0
-                c_val.metric("Desvío s/ línea", f"+{exceso_pct}%", help="Exceso sobre la distancia típica de su línea.")
-            elif row["patron"] == "no_achica":
-                c_val.metric("Déficit de avance", f"{row['valor_tecnico']} m", help="Metros por detrás del desplazamiento de su línea.")
-
-            c_ocurr.metric("Ocurrencias", f"{row['n_ocurrencias']}", help="Segmentos donde se repitió el comportamiento.")
-            c_sev.metric(
-                "Severidad", f"{row['severidad']:.2f}",
-                help="Dato técnico: solo ordena la lista. No mide qué tan grave es: los casos "
-                     "revisados en video con severidad máxima resultaron falsos positivos o leves.",
-            )
-
-            candidatos = row.get("posible_mismo_jugador_que", [])
-            if candidatos:
-                c_fusion.caption(f"🔗 Posible mismo jugador que track(s): {candidatos}")
-
-            # Botones con evidencia temporal para saltar al video
-            evidencia = row.get("evidencia_seg", [])
-            if evidencia:
-                st.markdown("**Evidencia en video (hacé clic para ir a ese instante):**")
-                cols_ev = st.columns(min(len(evidencia), 6))
-                for i, (t_ini, t_fin) in enumerate(evidencia[:6]):
-                    btn_label = f"▶ {format_time(t_ini)}"
-                    if cols_ev[i].button(btn_label, key=f"btn_seek_{row['patron']}_{row['track_id']}_{i}", width="stretch"):
-                        st.session_state["_pending_seek_time"] = float(t_ini)
-                        st.toast(f"Tiempo fijado en {format_time(t_ini)} — pasá a la pestaña '📊 Análisis' para reproducir.")
-                        st.rerun()
+    filas = list(df_filtrado.iterrows())
+    for i in range(0, len(filas), 2):
+        columnas = st.columns(2)
+        for col, (_, row) in zip(columnas, filas[i:i + 2]):
+            team_key = row["team"]
+            clave = f"{row['patron']}_{row['track_id']}"
+            with col, st.container(border=True, key=f"patron_{clave}"):
+                st.html(_html_tarjeta(row, PATRON_TITULOS.get(row["patron"], row["patron"]),
+                                      TEAM_LABELS.get(team_key, team_key), TEAM_COLORS.get(team_key, "#ffffff")))
+                # Evidencia: cada botón lleva a la Mesa táctica en ese instante
+                evidencia = row.get("evidencia_seg", [])[:6]
+                if evidencia:
+                    st.html('<div class="at-card-ev">Evidencia en video</div>')
+                    with st.container(horizontal=True, gap="small"):
+                        for j, (t_ini, _t_fin) in enumerate(evidencia):
+                            st.button(
+                                format_time(t_ini), key=f"btn_seek_{clave}_{j}",
+                                icon=":material/play_arrow:", type="primary" if j == 0 else "secondary",
+                                on_click=_ir_a, args=(t_ini,),
+                                help="Ver la jugada en la Mesa táctica (video y cancha).",
+                            )
 
     # Sección de información de patrones no evaluados
     if no_evaluados:
