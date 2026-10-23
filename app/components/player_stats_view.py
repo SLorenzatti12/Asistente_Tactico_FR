@@ -55,6 +55,10 @@ from src.analysis.player_stats import (  # noqa: E402
     filter_noise,
     infer_formation_zones,
 )
+from src.analysis.tactical_patterns import (  # noqa: E402
+    agrupar_candidatos_fusion,
+    detectar_candidatos_fusion,
+)
 from src.homography.medidas_cancha import medidas_de_df  # noqa: E402
 
 # Ventana de suavizado por defecto: la tomamos de la firma de la función en vez
@@ -64,6 +68,11 @@ _DEFAULT_VENTANA = inspect.signature(compute_player_stats).parameters["ventana_s
 CLASE_LABELS = {"player": "Jugador", "goalkeeper": "Arquero"}
 EQUIPOS = {"todos": "Ambos equipos", "home": TEAM_LABELS["home"], "away": TEAM_LABELS["away"]}
 SIN_EQUIPO = "Sin equipo"
+# Filtro de duración mínima (segundos en cancha del track o del grupo). Con
+# ~105 tracks por minuto, la mayoría dura pocos segundos: en sportivo_crop3,
+# de 1.394 filas agrupadas, 348 duran 30 s o más (ver decisiones.md).
+DURACIONES = {0: "Todos", 15: "≥15 s", 30: "≥30 s", 60: "≥1 min"}
+DURACION_POR_DEFECTO = 30
 
 # Estilo del mockup (.analytics-table, .player-inspector-card). Usa los tokens
 # --at-* que define main.py; atado a clases propias, no a data-testid.
@@ -126,9 +135,60 @@ def _calcular_stats(
     if "team" in limpio.columns:
         equipo = por_track["team"].agg(lambda s: s.mode().iat[0] if not s.mode().empty else None)
         stats["equipo"] = stats["track_id"].map(equipo)
+        # Grupo de "posiblemente el mismo jugador": cadenas sin ambigüedad de
+        # candidatos a fusión (tactical_patterns). Sin `team` no hay candidatos.
+        grupos = agrupar_candidatos_fusion(detectar_candidatos_fusion(df), stats["track_id"])
     else:
         stats["equipo"] = None
+        grupos = {int(t): [int(t)] for t in stats["track_id"]}
+    grupo_de = {t: cabeza for cabeza, cadena in grupos.items() for t in cadena}
+    stats["grupo"] = stats["track_id"].map(grupo_de)
     return stats.sort_values("distancia_total_m", ascending=False).reset_index(drop=True)
+
+
+@st.cache_data(show_spinner=False)
+def _agrupar(stats: pd.DataFrame, largo_cancha: float, agrupar: bool) -> pd.DataFrame:
+    """
+    Una fila por grupo de posibles mismos jugadores (o por track, si
+    `agrupar` es False). Sumas: tiempo en cancha, distancia y frames.
+    Velocidad promedio ponderada por tiempo; máxima, la mayor. Posición
+    promedio ponderada por frames; el rango de movimiento del grupo se
+    aproxima con la envolvente de los rangos de sus tracks. La zona se
+    recalcula sobre esa posición, salvo que el grupo sea mayormente arquero.
+    """
+    stats = stats.copy()
+    if not agrupar:
+        stats["grupo"] = stats["track_id"]
+    filas = []
+    for cabeza, g in stats.groupby("grupo", sort=False):
+        g = g.sort_values("t_inicio")
+        frames = g["n_frames"].clip(lower=1)
+        tiempo = g["tiempo_en_cancha_seg"]
+        x = float((g["pos_promedio_x"] * frames).sum() / frames.sum())
+        y = float((g["pos_promedio_y"] * frames).sum() / frames.sum())
+        arquero = frames[g["class_name"] == "goalkeeper"].sum() > frames.sum() / 2
+        filas.append({
+            "track_id": int(cabeza),
+            "tracks": [int(t) for t in g["track_id"]],
+            "class_name": "goalkeeper" if arquero else "player",
+            "equipo": g["equipo"].iloc[0],
+            "n_frames": int(frames.sum()),
+            "t_inicio": float(g["t_inicio"].min()),
+            "tiempo_en_cancha_seg": float(tiempo.sum()),
+            "distancia_total_m": float(g["distancia_total_m"].sum()),
+            "velocidad_max_ms": g["velocidad_max_ms"].max(),
+            "velocidad_prom_ms": float((g["velocidad_prom_ms"] * tiempo).sum() / tiempo.sum())
+                                 if tiempo.sum() > 0 else float(g["velocidad_prom_ms"].mean()),
+            "pos_promedio_x": x,
+            "pos_promedio_y": y,
+            "rango_x": float((g["pos_promedio_x"] + g["rango_x"] / 2).max() - (g["pos_promedio_x"] - g["rango_x"] / 2).min()),
+            "rango_y": float((g["pos_promedio_y"] + g["rango_y"] / 2).max() - (g["pos_promedio_y"] - g["rango_y"] / 2).min()),
+        })
+    out = infer_formation_zones(pd.DataFrame(filas), largo_cancha=largo_cancha)
+    out["zona"] = out["zona"].astype(object)
+    out.loc[out["class_name"] == "goalkeeper", "zona"] = "arquero"
+    out["etiqueta"] = out["tracks"].map(lambda ts: f"#{ts[0]}" + (f" (+{len(ts) - 1})" if len(ts) > 1 else ""))
+    return out.sort_values("distancia_total_m", ascending=False).reset_index(drop=True)
 
 
 # ── Controles ────────────────────────────────────────────────
@@ -168,6 +228,14 @@ def _controles() -> tuple[int, float, int]:
 def _filtrar(stats: pd.DataFrame) -> pd.DataFrame:
     """Barra de filtros del mockup. Devuelve los tracks que pasan los tres."""
     with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+        duracion = st.segmented_control(
+            "Duración mínima", list(DURACIONES), format_func=DURACIONES.get,
+            default=DURACION_POR_DEFECTO, required=True, key="ps_duracion",
+            label_visibility="collapsed",
+            help="Muestra solo los tracks (o grupos) que estuvieron en cancha al menos este tiempo. "
+                 "La mayoría de los tracks duran pocos segundos.",
+        )
+        stats = stats[stats["tiempo_en_cancha_seg"] >= duracion]
         equipo = st.segmented_control(
             "Equipo", list(EQUIPOS), format_func=EQUIPOS.get, default="todos",
             required=True, key="ps_equipo", label_visibility="collapsed",
@@ -186,7 +254,8 @@ def _filtrar(stats: pd.DataFrame) -> pd.DataFrame:
         buscar = st.text_input("Buscar track", placeholder="Buscar por número de track…",
                                key="ps_buscar", label_visibility="collapsed", width=230)
         if buscar.strip():
-            sub = sub[sub["track_id"].astype(str).str.contains(buscar.strip(), regex=False)]
+            texto = buscar.strip()
+            sub = sub[sub["tracks"].map(lambda ts: any(texto in str(t) for t in ts))]
     return sub
 
 
@@ -195,12 +264,12 @@ def _render_totales(sub: pd.DataFrame) -> None:
     with st.container(horizontal=True):
         st.metric(
             "Distancia total", f"{sub['distancia_total_m'].sum() / 1000:.1f} km", border=True,
-            help="Suma de la distancia de los tracks filtrados. Un mismo jugador puede estar "
-                 "partido en varios tracks; la suma no depende de eso.",
+            help="Suma de la distancia de las filas que muestra la tabla (con los filtros).",
         )
         st.metric(
-            "Tracks", f"{len(sub)}", border=True,
-            help=f"Promedio {sub['distancia_total_m'].mean():.0f} m por track.",
+            "Filas", f"{len(sub)}", border=True,
+            help=f"{int(sub['tracks'].map(len).sum())} tracks · promedio "
+                 f"{sub['distancia_total_m'].mean():.0f} m por fila.",
         )
         v_max = sub["velocidad_max_ms"].max()
         st.metric(
@@ -219,7 +288,7 @@ def _render_tabla(sub: pd.DataFrame) -> int | None:
     """Tabla del mockup: una fila por track, con barras de distancia. Devuelve
     el track elegido (clic en una fila), o None."""
     tabla = pd.DataFrame({
-        "track": "#" + sub["track_id"].astype(str),
+        "track": sub["etiqueta"],
         "equipo": sub["equipo"].map(lambda e: TEAM_LABELS.get(e, SIN_EQUIPO)),
         "zona": sub["zona"].map(ZONA_LABELS).fillna(sub["zona"]),
         "tiempo": sub["tiempo_en_cancha_seg"].map(format_time),
@@ -236,7 +305,8 @@ def _render_tabla(sub: pd.DataFrame) -> int | None:
         selection_mode="single-row",
         key="ps_tabla",
         column_config={
-            "track": st.column_config.TextColumn("Track", width="small"),
+            "track": st.column_config.TextColumn(
+                "Track", help="Con (+N): N tracks más que posiblemente son el mismo jugador (ver la ficha)."),
             "equipo": st.column_config.TextColumn("Equipo"),
             "zona": st.column_config.TextColumn("Zona"),
             "tiempo": st.column_config.TextColumn("En cancha", help="Duración del track (mm:ss)."),
@@ -297,7 +367,8 @@ def _render_ficha(fila: pd.Series, medidas: dict) -> None:
 <div class="at-insp-head">
   <div class="at-insp-num" style="color:{color}; border-color:{color}">#{int(fila['track_id'])}</div>
   <div>
-    <div class="at-insp-title">Track {int(fila['track_id'])}</div>
+    <div class="at-insp-title">{"Track " + str(int(fila['track_id'])) if len(fila['tracks']) == 1
+                                 else f"Grupo de {len(fila['tracks'])} tracks"}</div>
     <div class="at-insp-sub">
       <span>{html.escape(TEAM_LABELS.get(equipo, SIN_EQUIPO))}</span>
       <span class="at-insp-pill" style="color:{ZONA_COLORS.get(zona, '#9aa4b2')};
@@ -305,6 +376,9 @@ def _render_ficha(fila: pd.Series, medidas: dict) -> None:
     </div>
   </div>
 </div>
+{"" if len(fila['tracks']) == 1 else
+  '<div class="at-insp-note">Posiblemente el mismo jugador (no confirmado): '
+  + " → ".join(str(t) for t in fila['tracks']) + "</div>"}
 <div class="at-insp-sec">Posición promedio y dispersión</div>
 """)
     st.plotly_chart(_mini_cancha(fila, medidas), width="stretch", config={"displayModeBar": False},
@@ -348,7 +422,7 @@ def _render_mapa_posiciones(stats: pd.DataFrame, medidas: dict) -> None:
         fig.add_trace(go.Scatter(
             x=sub["pos_promedio_x"], y=sub["pos_promedio_y"],
             mode="markers+text",
-            text=sub["track_id"].astype(str),
+            text=sub["etiqueta"] if "etiqueta" in sub else sub["track_id"].astype(str),
             textposition="top center",
             textfont=dict(color=FIELD_LINES, size=9),
             marker=dict(
@@ -410,14 +484,21 @@ def render_player_stats(df: pd.DataFrame) -> None:
             )
             return
 
-        sub = _filtrar(stats)
+        agrupar = st.toggle(
+            "Agrupar posibles mismos jugadores", value=True, key="ps_agrupar",
+            help="Une tracks que por tiempo y posición posiblemente son la misma persona "
+                 "(el sistema pierde y reasigna la identidad). Solo los casos sin ambigüedad: "
+                 "si un track tiene varias continuaciones posibles, queda separado.",
+        )
+        sub = _filtrar(_agrupar(stats, medidas["largo"], agrupar))
         if sub.empty:
             st.info("Ningún track coincide con estos filtros.")
             return
         _render_totales(sub)
         elegido = _render_tabla(sub)
         st.caption("Ordená por cualquier columna con un clic en el encabezado; elegí una fila para ver su ficha. "
-                   "Una fila es un track: el mismo jugador puede aparecer en varios.")
+                   "Una fila es un track, o un grupo de tracks que posiblemente son el mismo jugador: "
+                   "el mismo jugador igual puede aparecer en más de una fila.")
 
     with col_ficha:
         fila = sub[sub["track_id"] == elegido].iloc[0] if elegido is not None else sub.iloc[0]

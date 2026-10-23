@@ -515,6 +515,34 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 - **La zona ahora usa el largo de la cancha del estadio** (`infer_formation_zones(largo_cancha=...)`, pendiente de la nota de Nico). En `sportivo_crop3` (102 m) puede cambiar la zona de tracks cerca del límite de cada tercio, comparado con antes (105 m).
 - **Límite conocido:** la zona sigue saliendo de los tercios de la cancha, sin la dirección de ataque de cada equipo. Para el equipo que ataca hacia la izquierda, "defensa" y "ataque" quedan invertidos.
 
+**Agrupar "posiblemente el mismo jugador" y filtrar por duración (22/10/2026):**
+- **Por qué:** la tabla mostraba 1.591 filas en `sportivo_crop3`. La causa es la fragmentación del tracking (~105 tracks por minuto, la mayoría de pocos segundos).
+- **Agrupar** usa los pares de `detectar_candidatos_fusion()`, sin cambiar sus criterios, con una regla nueva (`agrupar_candidatos_fusion()`, en `tactical_patterns.py`): se encadena A → B solo si A tiene un único candidato siguiente y B un único previo. Si hay varias continuaciones posibles, no se elige ninguna.
+- **Comparación medida en `sportivo_crop3`** (decisión de Santi: regla A):
+
+| Regla | Filas | Grupo más grande |
+|---|---|---|
+| Sin agrupar | 1.591 | — |
+| A: sin ambigüedad (**elegida**) | 1.394 | 6 tracks |
+| B: mejor candidato mutuo | 1.062 | 11 tracks |
+
+- **Filtro de duración** (decisión de Santi: por defecto ≥30 s). Filas con la regla A:
+
+| Mostrar | Filas |
+|---|---|
+| Todos | 1.394 |
+| ≥15 s | 580 |
+| ≥30 s | 348 |
+| ≥1 min | 124 |
+
+- **En `partido_clip2`** se agrupan 2 pares. Uno es el 21 → 74, ya confirmado contra el video como la misma persona.
+- **Se muestra como "posible", no como fusión:** en la tabla, "#1078 (+2)"; en la ficha, "posiblemente el mismo jugador (no confirmado)" con la cadena de tracks. El interruptor "Agrupar posibles mismos jugadores" vuelve a mostrar un track por fila. Los datos y los patrones no se tocan: es solo cómo se agrupan las filas en la vista Jugadores.
+- **Cómo se calcula cada fila de un grupo:**
+  - suma de distancia y de tiempo en cancha;
+  - velocidad promedio ponderada por tiempo; velocidad máxima, la mayor;
+  - posición ponderada por frames;
+  - rango de movimiento aproximado con la envolvente de los rangos de sus tracks.
+
 **Pendiente:**
 - **Nico:**
   - paleta del mockup en `theme.py` (hoy conviven dos paletas: la de `theme.py` pinta los gráficos y las tarjetas de métricas);

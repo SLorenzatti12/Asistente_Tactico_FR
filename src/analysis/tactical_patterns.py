@@ -1001,6 +1001,59 @@ def detectar_candidatos_fusion(df: pd.DataFrame, max_gap_seg: float = MAX_GAP_FU
     )
 
 
+def agrupar_candidatos_fusion(candidatos: pd.DataFrame, tracks) -> dict[int, list[int]]:
+    """
+    Agrupa en cadenas los tracks que POSIBLEMENTE son la misma persona, para
+    mostrarlos juntos (vista Jugadores). No es una fusión confirmada: usa los
+    pares de detectar_candidatos_fusion() y encadena solo los que no tienen
+    ambigüedad — A → B se une únicamente si A tiene un solo candidato
+    siguiente y B un solo candidato previo (contando solo pares entre
+    `tracks`). Si un track tiene varias continuaciones posibles (típico de
+    un amontonamiento), no se elige ninguna: elegir mal juntaría a dos
+    jugadores distintos, que es peor que dejarlos separados.
+
+    Medido en sportivo_crop3 (1.591 tracks después de filter_noise): 1.394
+    grupos, de hasta 6 tracks. Encadenar también el mejor candidato mutuo
+    daba 1.062, con grupos de hasta 11 (ver decisiones.md, 22/10/2026).
+
+    Args:
+        candidatos: salida de detectar_candidatos_fusion().
+        tracks: los track_id a agrupar (los que no tienen pares quedan solos).
+
+    Returns:
+        {primer track de la cadena: [tracks en orden temporal]}, con todos
+        los `tracks` en exactamente un grupo.
+    """
+    tracks = sorted(int(t) for t in set(tracks))
+    conjunto = set(tracks)
+    pares = candidatos[candidatos["track_id_previo"].isin(conjunto)
+                       & candidatos["track_id_siguiente"].isin(conjunto)]
+    n_sig = pares.groupby("track_id_previo").size()
+    n_prev = pares.groupby("track_id_siguiente").size()
+    unicos = pares[pares["track_id_previo"].map(n_sig).eq(1)
+                   & pares["track_id_siguiente"].map(n_prev).eq(1)]
+    siguiente = {int(a): int(b) for a, b in zip(unicos["track_id_previo"], unicos["track_id_siguiente"])}
+    tiene_previo = set(siguiente.values())
+
+    grupos: dict[int, list[int]] = {}
+    vistos: set[int] = set()
+    for t in tracks:
+        if t in tiene_previo or t in vistos:
+            continue
+        cadena = [t]
+        vistos.add(t)
+        while cadena[-1] in siguiente and siguiente[cadena[-1]] not in vistos:
+            cadena.append(siguiente[cadena[-1]])
+            vistos.add(cadena[-1])
+        grupos[t] = cadena
+    # Un ciclo (no debería pasar: cada par va hacia adelante en el tiempo)
+    # dejaría tracks sin grupo; se agregan solos para no perder ninguno.
+    for t in tracks:
+        if t not in vistos:
+            grupos[t] = [t]
+    return grupos
+
+
 def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFrame) -> pd.DataFrame:
     """
     Corre los patrones implementados (desconectado, no_achica) y devuelve
