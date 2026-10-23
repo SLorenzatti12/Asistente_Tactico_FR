@@ -48,6 +48,7 @@ no hay que agregarla.
 """
 
 import hashlib
+from collections.abc import Callable
 import os
 import shutil
 import socket
@@ -167,12 +168,59 @@ export default function (component) {
     }, intervaloMs)
   }
 
+  // Atajos de teclado, uno por instancia (como el timer). Se escuchan en
+  // toda la página, en fase de captura para ganarle a los controles nativos
+  // del <video> y a un botón o slider que haya quedado con el foco. No se
+  // tocan mientras se escribe en un campo de texto ni con Ctrl/Cmd/Alt.
+  //   Espacio: reproducir/pausar · ←/→: ±1 s (Shift: ±5 s)
+  //   1–9: tag con el botón N de la botonera · L / V: tagueo Local / Visitante
+  // Los tags y el equipo los resuelve Python (trigger "tecla"): así se usa
+  // la misma lógica que el clic en los botones de tagging.py.
+  if (!parentElement._videoSyncTeclas) {
+    const enCampoDeTexto = (el) =>
+      el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
+    const manejar = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return
+      const el = document.activeElement
+      if (enCampoDeTexto(el)) return
+      let accion = null
+      if (e.key === " ") {
+        accion = () => { video.paused ? video.play() : video.pause() }
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        const paso = (e.shiftKey ? 5 : 1) * (e.key === "ArrowLeft" ? -1 : 1)
+        accion = () => {
+          const fin = Number.isFinite(video.duration) ? video.duration : Infinity
+          video.currentTime = Math.min(fin, Math.max(0, video.currentTime + paso))
+        }
+      } else if (/^[1-9]$/.test(e.key)) {
+        const n = Number(e.key)
+        accion = () => setTriggerValue("tecla", { accion: "tag", n, t: video.currentTime })
+      } else if (e.key === "l" || e.key === "L" || e.key === "v" || e.key === "V") {
+        const equipo = e.key.toLowerCase() === "l" ? "home" : "away"
+        accion = () => setTriggerValue("tecla", { accion: "equipo", equipo })
+      }
+      if (!accion) return
+      e.preventDefault()
+      e.stopPropagation()
+      // Un botón o slider con el foco recibiría la tecla igual (espacio =
+      // clic, flechas = mover el slider): se le saca el foco.
+      if (el && el !== document.body && el.blur) el.blur()
+      accion()
+    }
+    document.addEventListener("keydown", manejar, true)
+    parentElement._videoSyncTeclas = manejar
+  }
+
   // Se llama cuando Streamlit desmonta esta instancia del todo (no en cada
   // re-render) — ver "Frontend renderer lifecycle" de la guía de CCv2.
   return () => {
     if (parentElement._videoSyncTimer) {
       clearInterval(parentElement._videoSyncTimer)
       parentElement._videoSyncTimer = null
+    }
+    if (parentElement._videoSyncTeclas) {
+      document.removeEventListener("keydown", parentElement._videoSyncTeclas, true)
+      parentElement._videoSyncTeclas = null
     }
   }
 }
@@ -284,7 +332,8 @@ def _servidor_videos() -> _ServidorVideos:
     return _ServidorVideos()
 
 
-def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = None) -> float | None:
+def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = None,
+                              al_tecla: Callable[[dict], None] | None = None) -> float | None:
     """
     Reproductor de video que expone su tiempo de reproducción a Python.
 
@@ -305,6 +354,9 @@ def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = N
         salto: {"id": int, "t": segundos} — lleva el video a `t`. Se aplica
             una sola vez por `id` (pasar el mismo dict en cada corrida no
             vuelve a saltar), y siempre al montarse una instancia nueva.
+        al_tecla: se llama con {"accion": "tag", "n": 1–9, "t": segundos} o
+            {"accion": "equipo", "equipo": "home"|"away"} cuando se aprieta un
+            atajo de tagueo (espacio y flechas los resuelve el propio video).
 
     Returns:
         El segundo de reproducción que el video acaba de reportar (float),
@@ -342,5 +394,8 @@ def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = N
         key=key,
         data=datos,
         on_tick_change=lambda: None,
+        on_tecla_change=lambda: None,
     )
+    if al_tecla is not None and resultado.tecla is not None:
+        al_tecla(resultado.tecla)
     return resultado.tick

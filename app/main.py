@@ -22,6 +22,8 @@ from components.map_view import render_map, render_metrics_panel
 
 # Luci desarrolla estas funciones en components/tagging.py
 from components.tagging import init_db, render_tagging_panel, render_semaforo_tab, format_time
+# Los atajos de teclado taguean con las mismas funciones que los botones de tagging.py
+from components.tagging import TAG_TIME_BUFFER_SEC, get_event_types_for_team, save_event
 
 # Estadísticas individuales por jugador (src/analysis/player_stats.py)
 from components.player_stats_view import render_player_stats
@@ -45,7 +47,7 @@ from src.db import partido_repo  # noqa: E402
 from src.homography.medidas_cancha import medidas_de_df  # noqa: E402
 
 # Identidad visual del sistema (paleta, tipografía, CSS global)
-from theme import aplicar_estilos_globales
+from theme import TEAM_LABELS, aplicar_estilos_globales
 
 ROOT    = Path(__file__).resolve().parent.parent
 OUTPUTS = ROOT / "data" / "outputs"
@@ -101,6 +103,12 @@ _ESTILOS_MOCKUP = """
   font-family: var(--at-mono); font-size: 0.66rem; padding: 2px 8px; border-radius: 999px;
   border: 1px solid var(--at-border); color: var(--at-text-2); white-space: nowrap;
 }
+.at-atajos { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.74rem; color: var(--at-text-2); }
+.at-atajos kbd {
+  font-family: var(--at-mono); font-size: 0.68rem; padding: 1px 6px; margin-right: 4px;
+  border: 1px solid var(--at-border); border-bottom-width: 2px; border-radius: 4px;
+  background: var(--at-surface-2); color: var(--at-text-1);
+}
 </style>
 """
 
@@ -151,6 +159,48 @@ def _pedir_salto(t: float) -> None:
     render_video_sincronizado): el componente aplica cada id una sola vez."""
     anterior = st.session_state.get("_salto") or {"id": 0}
     st.session_state["_salto"] = {"id": anterior["id"] + 1, "t": float(t)}
+
+
+# ── Atajos de teclado (los escucha el componente de video) ───────
+def _html_atajos(team: str) -> str:
+    """Leyenda de atajos, con el número de cada botón de tagueo del equipo activo."""
+    tipos = get_event_types_for_team(team)[:9]
+    tags = " ".join(f"<span><kbd>{i}</kbd>{t['name']}</span>" for i, t in enumerate(tipos, start=1))
+    return (
+        '<div class="at-atajos">'
+        "<span><kbd>Espacio</kbd>reproducir / pausar</span>"
+        "<span><kbd>←</kbd><kbd>→</kbd>±1 s (con <kbd>Shift</kbd> ±5 s)</span>"
+        "<span><kbd>L</kbd><kbd>V</kbd>taguear para Local / Visitante</span>"
+        f"<span>Tags {TEAM_LABELS.get(team, team)}:</span>{tags}"
+        "</div>"
+    )
+
+
+def _atajo_de_teclado(tecla: dict) -> None:
+    """
+    Atajos de tagueo que manda el componente de video. Hacen lo mismo que la
+    botonera de tagging.py (Luci): el número N es el botón N del equipo
+    activo, en el orden en que se ven, con el mismo colchón de
+    TAG_TIME_BUFFER_SEC. El tiempo es el del video al apretar la tecla.
+    """
+    if tecla.get("accion") == "equipo":
+        # El selector de equipo de tagging.py no se instanció en esta corrida
+        # del fragmento, así que se puede cambiar su valor acá.
+        st.session_state["tag_team"] = tecla["equipo"]
+        st.toast(f"Tagueando para: {TEAM_LABELS[tecla['equipo']]}")
+        st.rerun()
+    elif tecla.get("accion") == "tag":
+        team = st.session_state.get("tag_team") or "home"
+        tipos = get_event_types_for_team(team)
+        n = int(tecla["n"])
+        if n > len(tipos):
+            st.toast(f"No hay un botón {n} en la botonera de {TEAM_LABELS[team]} (hay {len(tipos)}).")
+            return
+        nombre = tipos[n - 1]["name"]
+        t = max(0.0, float(tecla["t"]) - TAG_TIME_BUFFER_SEC)
+        save_event(st.session_state["selected_match"], nombre, t, team)
+        st.toast(f"Tag guardado: {nombre} @ {format_time(t)} ({TEAM_LABELS[team]})")
+        st.rerun()      # la corrida completa actualiza el historial de tags
 
 
 # ── Estado inicial de la sesión ─────────────────────────────
@@ -284,7 +334,7 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, col_visor, col_metricas) 
                 # widget con ese key en la misma corrida.
                 tick = render_video_sincronizado(
                     match["tracked_video"], key=f"video_{match['name']}",
-                    salto=st.session_state.get("_salto"),
+                    salto=st.session_state.get("_salto"), al_tecla=_atajo_de_teclado,
                 )
                 if tick is not None:
                     st.session_state["current_time"] = tick
@@ -344,6 +394,8 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, col_visor, col_metricas) 
                 f"<span>{format_time(duracion)}</span></div>",
                 unsafe_allow_html=True,
             )
+        if mostrar_video:
+            st.html(_html_atajos(st.session_state.get("tag_team") or "home"))
 
         if mostrar_cancha:
             with panel_cancha:
@@ -415,11 +467,16 @@ def main():
         st.session_state["_video_visible"] = False
     if vista == "analisis":
         col_visor, col_lado = st.columns([2.3, 1], gap="medium")
+        # Tagueo arriba, al lado del video (para mirar y marcar a la vez), y
+        # métricas debajo. Los huecos se crean en ese orden y se llenan
+        # después: el fragmento escribe las métricas en el de abajo.
+        with col_lado:
+            hueco_tagueo, hueco_metricas = st.container(), st.container()
 
         # ── Video sincronizado + mapa (Nico) + métricas (Nico) ──
-        _panel_sincronizado(df, match, col_visor, col_lado)
+        _panel_sincronizado(df, match, col_visor, hueco_metricas)
 
-        with col_lado:
+        with hueco_tagueo:
             # ── Tagueo one-click (Luci) ────────────────
             with st.container(border=True, key="panel_tagueo"):
                 render_tagging_panel()

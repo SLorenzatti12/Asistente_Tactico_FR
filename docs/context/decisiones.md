@@ -478,13 +478,27 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
   - AppTest sin excepciones sobre `sportivo_crop3` y `partido_clip2`, en las cuatro vistas y los tres modos del visor;
   - en el navegador, el clic en la evidencia 21:06 del track 2374 lleva a la Mesa táctica con el video en 1266.83 s.
 
+**Atajos de teclado y tagueo junto al video (22/10/2026, pedido del club):**
+- **Atajos:** los escucha el componente de video, en toda la página, mientras el video está visible:
+  - <kbd>Espacio</kbd> reproduce y pausa; <kbd>←</kbd>/<kbd>→</kbd> mueven ±1 s, y con <kbd>Shift</kbd> ±5 s;
+  - <kbd>1</kbd>–<kbd>9</kbd> taguean con el botón N de la botonera del equipo activo;
+  - <kbd>L</kbd> y <kbd>V</kbd> cambian el tagueo a Local o Visitante.
+- **Los tags por teclado usan las mismas funciones que los botones** de `tagging.py` (`get_event_types_for_team`, `save_event`, `TAG_TIME_BUFFER_SEC`), sin tocar el archivo de Luci. Se guarda el tiempo del video al apretar la tecla, menos el colchón.
+- **No se disparan** mientras se escribe en un campo de texto ni con <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>/<kbd>Alt</kbd>. Si un botón o el slider tenía el foco, se lo sacan, para que <kbd>Espacio</kbd> no lo apriete.
+- **Se usan números y no letras por tipo** (como P/S/T en el mockup) porque los tipos de evento son configurables. Debajo del slider, una leyenda muestra qué número corresponde a cada botón.
+- **El tagueo pasó arriba de la columna derecha**, al lado del video; las métricas, debajo.
+- **Verificado en el navegador** con teclas reales sobre `sportivo_crop3`:
+  - espacio y flechas mueven el video lo esperado;
+  - a 0:30, <kbd>2</kbd> guardó "Salida" Local en 0:20, <kbd>V</kbd> cambió a Visitante y <kbd>1</kbd> guardó "Presión" Visitante en 0:20;
+  - los eventos de prueba se borraron después.
+
 **Pendiente:**
 - **Nico:**
   - paleta del mockup en `theme.py` (hoy conviven dos paletas: la de `theme.py` pinta los gráficos y las tarjetas de métricas);
   - cancha estilo mockup, interruptores de envolvente y centroides, tarjetas de métricas;
   - vista Jugadores.
 - **Luci:** botonera de tagueo y semáforo.
-- **Santi, después de la demo:** barra de transporte propia, marcas de eventos en la línea de tiempo y atajos de teclado, dentro del componente de video.
+- **Santi, después de la demo:** barra de transporte propia y marcas de eventos en la línea de tiempo, dentro del componente de video.
 
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
