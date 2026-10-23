@@ -114,7 +114,8 @@ def _calcular_stats(
     cancha no deben compartir el resultado.
 
     Agrega por track el equipo (el más frecuente en sus filas) y el segundo
-    en que aparece por primera vez (para saltar a la Mesa táctica).
+    en que aparece por primera vez, y el medio del track (t_medio), que es
+    a donde lleva "Ver en la Mesa táctica".
     """
     limpio = filter_noise(df, min_frames=min_frames, max_speed_ms=max_speed_ms)
     stats = infer_formation_zones(compute_player_stats(limpio, ventana_suavizado=ventana_suavizado),
@@ -132,6 +133,11 @@ def _calcular_stats(
 
     por_track = limpio.groupby("track_id")
     stats["t_inicio"] = stats["track_id"].map(por_track["time_sec"].min())
+    # Momento para "Ver en la Mesa táctica": el medio del track y no su
+    # comienzo. Un track puede empezar sobre otro jugador y pasarse al suyo
+    # en un cruce (track 1078 de sportivo_crop3: 2 s de un jugador de Crecer,
+    # 18 s de uno de Sportivo); el medio cae en el tramo que decidió su equipo.
+    stats["t_medio"] = stats["track_id"].map((por_track["time_sec"].min() + por_track["time_sec"].max()) / 2)
     if "team" in limpio.columns:
         equipo = por_track["team"].agg(lambda s: s.mode().iat[0] if not s.mode().empty else None)
         stats["equipo"] = stats["track_id"].map(equipo)
@@ -174,6 +180,8 @@ def _agrupar(stats: pd.DataFrame, largo_cancha: float, agrupar: bool) -> pd.Data
             "equipo": g["equipo"].iloc[0],
             "n_frames": int(frames.sum()),
             "t_inicio": float(g["t_inicio"].min()),
+            # En un grupo, el medio de su track más largo (el que más pesa).
+            "t_ver": float(g.loc[tiempo.idxmax(), "t_medio"]),
             "tiempo_en_cancha_seg": float(tiempo.sum()),
             "distancia_total_m": float(g["distancia_total_m"].sum()),
             "velocidad_max_ms": g["velocidad_max_ms"].max(),
@@ -396,9 +404,11 @@ movimiento {fila['rango_x']:.0f} × {fila['rango_y']:.0f} m</div>
 </div>
 """)
     st.button(
-        f"Ver en la Mesa táctica ({format_time(fila['t_inicio'])})",
+        f"Ver en la Mesa táctica ({format_time(fila['t_ver'])})",
         icon=":material/play_arrow:", type="primary", width="stretch",
-        on_click=_ir_a, args=(fila["t_inicio"],), key="ps_ver_en_mesa",
+        on_click=_ir_a, args=(fila["t_ver"],), key="ps_ver_en_mesa",
+        help="Lleva al medio del track (en un grupo, al de su track más largo), no a su "
+             "primer segundo: un track puede arrancar sobre otro jugador y pasarse al suyo.",
     )
 
 

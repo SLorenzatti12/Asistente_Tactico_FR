@@ -508,7 +508,9 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
   - barra de filtros: equipo, zona con conteo, búsqueda por número de track, y los parámetros de análisis en un popover;
   - cuatro tarjetas de totales: distancia total, tracks, velocidad máxima (orientativa) y tiempo promedio en cancha;
   - tabla ordenable con barras de distancia y selección de fila;
-  - ficha lateral del track elegido: mini cancha con posición promedio y elipse de dispersión, sus números y "Ver en la Mesa táctica", que salta al segundo en que aparece el track;
+  - ficha lateral del track elegido: mini cancha con posición promedio y elipse de dispersión, sus números y "Ver en la Mesa táctica";
+  - **"Ver en la Mesa táctica" lleva al medio del track** (en un grupo, al medio de su track más largo), no a su primer segundo. Caso que lo motivó (23/10/2026): el track 1078 de `sportivo_crop3` sigue a un jugador de Crecer de 539,0 a 540,4 s, y en un cruce pasa a uno de Sportivo hasta 560,7 s. El voto por color lo marca Local, que es correcto para la mayor parte del track, pero el botón llevaba al comienzo y mostraba al de Crecer. Ahora lleva a 549,9 s (suelto) o a 739,8 s (grupo 1078 → 1146 → 1282).
+  - Pendiente, a medir antes de decidir: partir un track en dos cuando el color de la camiseta cambia dentro de él (cambia la asignación de equipos, que alimenta estadísticas y patrones);
   - el mapa de posiciones de todos los tracks, en un desplegable.
 - **Solo datos reales** (decisión de Santi): una fila por track, sin dorsales, nombres, sprints, rangos de velocidad ni valoración del DT.
 - **El equipo de cada track** es el más frecuente en sus filas; **el inicio**, su primer `time_sec`.
