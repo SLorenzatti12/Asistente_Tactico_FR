@@ -486,7 +486,7 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 - **Los tags por teclado usan las mismas funciones que los botones** de `tagging.py` (`get_event_types_for_team`, `save_event`, `TAG_TIME_BUFFER_SEC`), sin tocar el archivo de Luci. Se guarda el tiempo del video al apretar la tecla, menos el colchón.
 - **No se disparan** mientras se escribe en un campo de texto ni con <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>/<kbd>Alt</kbd>. Si un botón o el slider tenía el foco, se lo sacan, para que <kbd>Espacio</kbd> no lo apriete.
 - **Se usan números y no letras por tipo** (como P/S/T en el mockup) porque los tipos de evento son configurables. Debajo del slider, una leyenda muestra qué número corresponde a cada botón.
-- **El tagueo pasó arriba de la columna derecha**, al lado del video; las métricas, debajo.
+- **Visor, tagueo y métricas van en tres columnas**, para que se vean a la vez junto al video. En esa columna angosta, los números de las métricas van más chicos (estilo limitado al contenedor `panel_metricas` de `main.py`).
 - **Verificado en el navegador** con teclas reales sobre `sportivo_crop3`:
   - espacio y flechas mueven el video lo esperado;
   - a 0:30, <kbd>2</kbd> guardó "Salida" Local en 0:20, <kbd>V</kbd> cambió a Visitante y <kbd>1</kbd> guardó "Presión" Visitante en 0:20;

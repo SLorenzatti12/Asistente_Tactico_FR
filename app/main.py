@@ -103,6 +103,14 @@ _ESTILOS_MOCKUP = """
   font-family: var(--at-mono); font-size: 0.66rem; padding: 2px 8px; border-radius: 999px;
   border: 1px solid var(--at-border); color: var(--at-text-2); white-space: nowrap;
 }
+/* Métricas en una columna angosta (al lado del tagueo): números y
+   etiquetas más chicos para que no se corten, como las celdas compactas
+   del mockup. Los data-testid son de st.metric (map_view.py, Nico): si
+   cambian con una versión nueva de Streamlit, esto deja de aplicar pero no
+   rompe nada. */
+.st-key-panel_metricas [data-testid="stMetric"] { padding: 0.5rem 0.65rem 0.4rem !important; }
+.st-key-panel_metricas [data-testid="stMetricValue"] { font-size: 1.35rem !important; }
+.st-key-panel_metricas [data-testid="stMetricLabel"] p { font-size: 0.75rem !important; }
 .at-atajos { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.74rem; color: var(--at-text-2); }
 .at-atajos kbd {
   font-family: var(--at-mono); font-size: 0.68rem; padding: 1px 6px; margin-right: 4px;
@@ -466,17 +474,14 @@ def main():
     if vista != "analisis":
         st.session_state["_video_visible"] = False
     if vista == "analisis":
-        col_visor, col_lado = st.columns([2.3, 1], gap="medium")
-        # Tagueo arriba, al lado del video (para mirar y marcar a la vez), y
-        # métricas debajo. Los huecos se crean en ese orden y se llenan
-        # después: el fragmento escribe las métricas en el de abajo.
-        with col_lado:
-            hueco_tagueo, hueco_metricas = st.container(), st.container()
+        # Visor, tagueo y métricas lado a lado: se ven a la vez, sin scroll,
+        # para mirar el video y marcar al mismo tiempo.
+        col_visor, col_tagueo, col_metricas = st.columns([2.2, 1, 1], gap="small")
 
         # ── Video sincronizado + mapa (Nico) + métricas (Nico) ──
-        _panel_sincronizado(df, match, col_visor, hueco_metricas)
+        _panel_sincronizado(df, match, col_visor, col_metricas)
 
-        with hueco_tagueo:
+        with col_tagueo:
             # ── Tagueo one-click (Luci) ────────────────
             with st.container(border=True, key="panel_tagueo"):
                 render_tagging_panel()
