@@ -503,11 +503,22 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
   - a 0:30, <kbd>2</kbd> guardó "Salida" Local en 0:20, <kbd>V</kbd> cambió a Visitante y <kbd>1</kbd> guardó "Presión" Visitante en 0:20;
   - los eventos de prueba se borraron después.
 
+**Vista Jugadores con el aspecto del mockup (22/10/2026, con el OK de Nico):**
+- **Qué tiene** (`player_stats_view.py`):
+  - barra de filtros: equipo, zona con conteo, búsqueda por número de track, y los parámetros de análisis en un popover;
+  - cuatro tarjetas de totales: distancia total, tracks, velocidad máxima (orientativa) y tiempo promedio en cancha;
+  - tabla ordenable con barras de distancia y selección de fila;
+  - ficha lateral del track elegido: mini cancha con posición promedio y elipse de dispersión, sus números y "Ver en la Mesa táctica", que salta al segundo en que aparece el track;
+  - el mapa de posiciones de todos los tracks, en un desplegable.
+- **Solo datos reales** (decisión de Santi): una fila por track, sin dorsales, nombres, sprints, rangos de velocidad ni valoración del DT.
+- **El equipo de cada track** es el más frecuente en sus filas; **el inicio**, su primer `time_sec`.
+- **La zona ahora usa el largo de la cancha del estadio** (`infer_formation_zones(largo_cancha=...)`, pendiente de la nota de Nico). En `sportivo_crop3` (102 m) puede cambiar la zona de tracks cerca del límite de cada tercio, comparado con antes (105 m).
+- **Límite conocido:** la zona sigue saliendo de los tercios de la cancha, sin la dirección de ataque de cada equipo. Para el equipo que ataca hacia la izquierda, "defensa" y "ataque" quedan invertidos.
+
 **Pendiente:**
 - **Nico:**
   - paleta del mockup en `theme.py` (hoy conviven dos paletas: la de `theme.py` pinta los gráficos y las tarjetas de métricas);
-  - cancha estilo mockup, interruptores de envolvente y centroides, tarjetas de métricas;
-  - vista Jugadores.
+  - cancha estilo mockup, interruptores de envolvente y centroides, tarjetas de métricas.
 - **Luci:** botonera de tagueo y semáforo.
 - **Santi, después de la demo:** barra de transporte propia y marcas de eventos en la línea de tiempo, dentro del componente de video.
 

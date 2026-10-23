@@ -41,7 +41,7 @@ Calcular `medidas = medidas_de_df(df)` después del `pd.read_parquet` y pasárse
 - Textos de ayuda de Amplitud/Profundidad (309-310): hoy dicen "68 m" y "105 m". Usar `ancho` y `largo`, o sacar el número.
 - `render_metrics_panel`: las métricas de bloque (amplitud, profundidad, área) **no** necesitan cambios. Se calculan desde las coordenadas, que ya salen en metros reales si la calibración usó las medidas correctas.
 
-### `app/components/player_stats_view.py` — sigue pendiente (el mapa de posiciones todavía dibuja 105×68)
+### `app/components/player_stats_view.py` — **hecho el 22/10/2026** (Santi, con tu OK): la vista se rehízo con el aspecto del mockup y usa `medidas_de_df(df)` para los mapas y para `infer_formation_zones(largo_cancha=...)`. `largo_cancha` es parámetro de `_calcular_stats`, así entra en la clave del caché.
 - Rango de los ejes del mapa de posiciones (241-242): igual que en `map_view`.
 - `_calcular_stats` (64-77): `infer_formation_zones` reparte en tercios del largo. Hay que pasarle `largo_cancha=medidas["largo"]`, y **agregar `largo_cancha` como parámetro de `_calcular_stats`**. `st.cache_data` arma la clave con los argumentos, no con `df.attrs`: si no, dos partidos con el mismo contenido pero distinta cancha compartirían el cálculo. El CLI de `src/analysis/player_stats.py` ya lo hace así.
 
@@ -89,7 +89,7 @@ Santi pasó su parte (`main.py`, `config.toml`, `tactical_patterns_view.py`, `vi
   `main.py` ya le pasa `medidas=` a `render_map` y dibuja el encabezado "Cancha cenital L × W m" arriba del mapa.
 - **`map_view.py`, interruptores de envolvente y centroides:** dos parámetros nuevos en `render_map` (por ejemplo `mostrar_bloques=True`, `mostrar_centroides=True`). Los interruptores los pongo yo en `main.py`.
 - **`map_view.py`, tarjetas de métricas:** el panel ya va dentro de una tarjeta con borde (`st.container(key="panel_metricas")`). Falta, por equipo, el encabezado en su color y las barras con `st.progress`.
-- **`player_stats_view.py` (etapa 6):**
+- **`player_stats_view.py` (etapa 6) — hecho el 22/10/2026 con tu OK** (ver decisiones.md):
   - filtros por equipo y línea en píldoras;
   - tarjetas de totales;
   - `st.dataframe` con `column_config` (barras);
