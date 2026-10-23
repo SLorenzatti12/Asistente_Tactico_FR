@@ -99,6 +99,10 @@ _CSS = """
 #video-sync-el {
   display: block;
   width: 100%;
+  /* Con la cámara panorámica (1920 × 460) el alto sale del ancho; con un
+     video más alto, este tope evita que empuje todo fuera de la pantalla. */
+  max-height: 42vh;
+  object-fit: contain;
   background: #000;
 }
 """

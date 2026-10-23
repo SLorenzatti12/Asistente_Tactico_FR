@@ -486,7 +486,13 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 - **Los tags por teclado usan las mismas funciones que los botones** de `tagging.py` (`get_event_types_for_team`, `save_event`, `TAG_TIME_BUFFER_SEC`), sin tocar el archivo de Luci. Se guarda el tiempo del video al apretar la tecla, menos el colchón.
 - **No se disparan** mientras se escribe en un campo de texto ni con <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>/<kbd>Alt</kbd>. Si un botón o el slider tenía el foco, se lo sacan, para que <kbd>Espacio</kbd> no lo apriete.
 - **Se usan números y no letras por tipo** (como P/S/T en el mockup) porque los tipos de evento son configurables. Debajo del slider, una leyenda muestra qué número corresponde a cada botón.
-- **Visor, tagueo y métricas van en tres columnas**, para que se vean a la vez junto al video. En esa columna angosta, los números de las métricas van más chicos (estilo limitado al contenedor `panel_metricas` de `main.py`).
+- **Disposición de la Mesa táctica (dos filas):**
+  - **Arriba:** el video ancho, con la barra de tiempo y los atajos debajo, y el tagueo a su derecha.
+  - **Abajo:** cancha y métricas. En "Solo cancha", la cancha sube al lugar del video.
+- **Por qué el video va ancho:** la cámara es panorámica. `sportivo_crop3` mide 1920 × 460, y en una columna de ~300 px el video quedaba de ~70 px de alto. Ahora, en una pantalla de 1440 × 900, mide 922 × 221 px.
+- **La tarjeta de tagueo tiene alto fijo con scroll interno** (`ALTO_PANEL_TAGUEO`). Si no, el historial de eventos empujaba la fila de abajo hasta los ~2.200 px.
+- **El modo del visor quedó fuera del fragmento**, porque cambia la disposición. Cambiarlo redibuja la página entera.
+- En la columna de métricas, los números van más chicos, con un estilo limitado al contenedor `panel_metricas`.
 - **Verificado en el navegador** con teclas reales sobre `sportivo_crop3`:
   - espacio y flechas mueven el video lo esperado;
   - a 0:30, <kbd>2</kbd> guardó "Salida" Local en 0:20, <kbd>V</kbd> cambió a Visitante y <kbd>1</kbd> guardó "Presión" Visitante en 0:20;

@@ -278,6 +278,10 @@ def match_selector() -> dict | None:
 
 
 # ── Video sincronizado + slider manual + mapa + métricas ─────
+# Alto (px) de la tarjeta de tagueo, al lado del video: el del video
+# panorámico más la barra de tiempo y los atajos, en una pantalla de 1440 px.
+ALTO_PANEL_TAGUEO = 430
+
 _MODOS_VISOR = {
     "dividido": ":material/splitscreen_left: Dividido",
     "cancha": ":material/sports_soccer: Solo cancha",
@@ -286,7 +290,8 @@ _MODOS_VISOR = {
 
 
 @st.fragment
-def _panel_sincronizado(df: pd.DataFrame, match: dict, col_visor, col_metricas) -> None:
+def _panel_sincronizado(df: pd.DataFrame, match: dict, mostrar_video: bool, mostrar_cancha: bool,
+                        hueco_video, hueco_tiempo, col_cancha, col_metricas) -> None:
     """
     Video + slider manual + mapa 2D + métricas, en un mismo st.fragment:
     mientras el video reproduce, components/video_sync.py actualiza
@@ -296,27 +301,13 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, col_visor, col_metricas) 
     de session_state hecho por otro fragmento no le llega (cada fragmento
     solo se re-ejecuta por sus propios triggers).
 
-    El modo del visor (dividido / solo cancha / solo video) también vive
-    acá: cambiarlo redibuja solo este bloque.
-
-    El tagueo (Luci) queda deliberadamente afuera de este fragmento — lo
-    sigue escribiendo main() en col_metricas, después de esta llamada.
+    Los huecos los arma main() según el modo del visor: arriba el video
+    (hueco_video) con la barra de tiempo debajo (hueco_tiempo), al lado del
+    tagueo; abajo, la cancha y las métricas. El tagueo (Luci) queda
+    deliberadamente afuera de este fragmento — lo escribe main() después de
+    esta llamada.
     """
-    with col_visor:
-        modo = st.segmented_control(
-            "Modo del visor", list(_MODOS_VISOR), format_func=_MODOS_VISOR.get,
-            required=True, key="modo_visor", label_visibility="collapsed",
-        )
-        hay_video = match["tracked_video"].exists()
-        mostrar_video = hay_video and modo in ("dividido", "video")
-        mostrar_cancha = modo in ("dividido", "cancha") or not hay_video
-        if not hay_video:
-            st.info("Video anotado no encontrado — mostrando solo el mapa.")
-        if mostrar_video and mostrar_cancha:
-            panel_video, panel_cancha = st.columns(2)
-        else:
-            panel_video = panel_cancha = st.container()
-
+    with hueco_tiempo:
         duracion = float(df["time_sec"].max()) if not df.empty else 60.0
         # Clamp: session_state["current_time"] persiste entre partidos, y el
         # slider tira error si su value queda por encima del max de este.
@@ -330,7 +321,7 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, col_visor, col_metricas) 
         st.session_state["_video_visible"] = mostrar_video
 
         if mostrar_video:
-            with panel_video:
+            with hueco_video:
                 st.html(_html_panel("Cámara · video anotado", "RF-DETR + ByteTrack"))
                 # None salvo en la corrida exacta en que el video reportó un
                 # tiempo nuevo (ver el docstring de render_video_sincronizado
@@ -405,11 +396,11 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, col_visor, col_metricas) 
         if mostrar_video:
             st.html(_html_atajos(st.session_state.get("tag_team") or "home"))
 
-        if mostrar_cancha:
-            with panel_cancha:
-                medidas = medidas_de_df(df)
-                st.html(_html_panel(f"Cancha cenital {medidas['largo']:g} × {medidas['ancho']:g} m"))
-                render_map(df, current_time=st.session_state["current_time"], medidas=medidas)
+    if mostrar_cancha:
+        with col_cancha:
+            medidas = medidas_de_df(df)
+            st.html(_html_panel(f"Cancha cenital {medidas['largo']:g} × {medidas['ancho']:g} m"))
+            render_map(df, current_time=st.session_state["current_time"], medidas=medidas)
 
     with col_metricas:
         with st.container(border=True, key="panel_metricas"):
@@ -474,16 +465,45 @@ def main():
     if vista != "analisis":
         st.session_state["_video_visible"] = False
     if vista == "analisis":
-        # Visor, tagueo y métricas lado a lado: se ven a la vez, sin scroll,
-        # para mirar el video y marcar al mismo tiempo.
-        col_visor, col_tagueo, col_metricas = st.columns([2.2, 1, 1], gap="small")
+        # El modo del visor cambia la disposición, así que vive afuera del
+        # fragmento: cambiarlo redibuja la página entera (pasa pocas veces).
+        modo = st.segmented_control(
+            "Modo del visor", list(_MODOS_VISOR), format_func=_MODOS_VISOR.get,
+            required=True, key="modo_visor", label_visibility="collapsed",
+        )
+        hay_video = match["tracked_video"].exists()
+        mostrar_video = hay_video and modo in ("dividido", "video")
+        mostrar_cancha = modo in ("dividido", "cancha") or not hay_video
+        if not hay_video:
+            st.info("Video anotado no encontrado — mostrando solo el mapa.")
+
+        # Fila de arriba: video ancho y, a su derecha, el tagueo, para mirar y
+        # marcar a la vez. La cámara de los partidos es panorámica
+        # (sportivo_crop3: 1920 × 460): en una columna angosta quedaba de unos
+        # 70 px de alto. Debajo del video, la barra de tiempo.
+        # Fila de abajo: cancha y métricas. En "Solo cancha", la cancha sube
+        # al lugar del video.
+        col_principal, col_tagueo = st.columns([2.6, 1], gap="small")
+        with col_principal:
+            hueco_video, hueco_tiempo = st.container(), st.container()
+        if mostrar_video and mostrar_cancha:
+            col_cancha, col_metricas = st.columns([1.4, 1], gap="small")
+        elif mostrar_cancha:
+            col_cancha, col_metricas = hueco_video, st.container()
+        else:
+            col_cancha, col_metricas = None, st.container()
 
         # ── Video sincronizado + mapa (Nico) + métricas (Nico) ──
-        _panel_sincronizado(df, match, col_visor, col_metricas)
+        _panel_sincronizado(df, match, mostrar_video, mostrar_cancha,
+                            hueco_video, hueco_tiempo, col_cancha, col_metricas)
 
         with col_tagueo:
             # ── Tagueo one-click (Luci) ────────────────
-            with st.container(border=True, key="panel_tagueo"):
+            # Alto fijo con scroll interno: los botones quedan arriba, al lado
+            # del video, y el historial (largo) se recorre dentro de la
+            # tarjeta. Sin esto la fila de abajo (cancha y métricas) arrancaba
+            # debajo de todo el historial.
+            with st.container(border=True, key="panel_tagueo", height=ALTO_PANEL_TAGUEO):
                 render_tagging_panel()
     elif vista == "jugadores":
         # ── Estadísticas individuales por jugador ──
