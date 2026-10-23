@@ -832,16 +832,16 @@ def render_tagging_panel() -> None:
         st.divider()
         events_df = get_events(match_name)
 
-        # Mismo patrón que Métricas/Tagueo en main.py: tabs en vez de
-        # apilar los dos gráficos, así no crece la pantalla en vivo.
-        tab_timeline, tab_comparison = st.tabs(["Momentos del partido", "Comparativa por tipo"])
-        with tab_timeline:
-            _render_events_timeline(events_df, current_time)
-        with tab_comparison:
-            _render_events_comparison(events_df)
+        # Gráficos e historial plegados: en la Mesa táctica la tarjeta va al
+        # lado del video con alto fijo, y a la vista quedan los botones.
+        # Tabs adentro en vez de apilar los dos gráficos.
+        with st.expander("Gráficos de eventos", expanded=False):
+            tab_timeline, tab_comparison = st.tabs(["Momentos del partido", "Comparativa por tipo"])
+            with tab_timeline:
+                _render_events_timeline(events_df, current_time)
+            with tab_comparison:
+                _render_events_comparison(events_df)
 
-        # Historial plegado: en la Mesa táctica la tarjeta va al lado del
-        # video con alto fijo, y a la vista quedan los botones y el gráfico.
         with st.expander(f"Historial de eventos ({len(events_df)})", expanded=False):
             _render_events_cards(events_df)
 
