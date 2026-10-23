@@ -753,8 +753,8 @@ def _manage_event_types_dialog() -> None:
 
 
 def _render_events_cards(events_df: pd.DataFrame) -> None:
-    """Una tarjeta por evento — nada de grilla tipo Excel."""
-    st.markdown("**Editar eventos**")
+    """Una tarjeta por evento — nada de grilla tipo Excel. Va dentro del
+    desplegable "Historial de eventos" de render_tagging_panel()."""
     if events_df.empty:
         st.caption("Todavía no hay eventos tagueados para este partido.")
         return
@@ -840,8 +840,10 @@ def render_tagging_panel() -> None:
         with tab_comparison:
             _render_events_comparison(events_df)
 
-        st.divider()
-        _render_events_cards(events_df)
+        # Historial plegado: en la Mesa táctica la tarjeta va al lado del
+        # video con alto fijo, y a la vista quedan los botones y el gráfico.
+        with st.expander(f"Historial de eventos ({len(events_df)})", expanded=False):
+            _render_events_cards(events_df)
 
 
 def _inject_semaforo_css() -> None:

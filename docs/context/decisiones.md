@@ -490,7 +490,8 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
   - **Arriba:** el video ancho, con la barra de tiempo y los atajos debajo, y el tagueo a su derecha.
   - **Abajo:** cancha y métricas. En "Solo cancha", la cancha sube al lugar del video.
 - **Por qué el video va ancho:** la cámara es panorámica. `sportivo_crop3` mide 1920 × 460, y en una columna de ~300 px el video quedaba de ~70 px de alto. Ahora, en una pantalla de 1440 × 900, mide 922 × 221 px.
-- **La tarjeta de tagueo tiene alto fijo con scroll interno** (`ALTO_PANEL_TAGUEO`). Si no, el historial de eventos empujaba la fila de abajo hasta los ~2.200 px.
+- **El historial de eventos va en un desplegable cerrado** (en `tagging.py`, con el OK de Luci): a la vista quedan los botones y el gráfico de eventos.
+- **La tarjeta de tagueo tiene alto fijo** (`ALTO_PANEL_TAGUEO` = 740 px, lo que miden botones y gráfico con el historial plegado). Si se abre el historial, se recorre con scroll dentro de la tarjeta. Sin alto fijo, el historial empujaba la fila de abajo hasta los ~2.200 px. Costo: en una pantalla de 900 px de alto, la cancha y las métricas quedan debajo del borde y hay que hacer scroll.
 - **El modo del visor quedó fuera del fragmento**, porque cambia la disposición. Cambiarlo redibuja la página entera.
 - **"Solo cancha" también reproduce.** El video no se ve, pero sigue montado en modo mini: un botón de reproducir/pausar y el tiempo, arriba de la barra. Es el video el que hace avanzar el tiempo de la cancha. Antes, en ese modo, no había forma de ponerla a correr. Los atajos andan igual.
   - El video oculto es de 1 px, no `display:none`, para que el navegador no deje de decodificarlo.

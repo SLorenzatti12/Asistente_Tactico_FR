@@ -278,9 +278,11 @@ def match_selector() -> dict | None:
 
 
 # ── Video sincronizado + slider manual + mapa + métricas ─────
-# Alto (px) de la tarjeta de tagueo, al lado del video: el del video
-# panorámico más la barra de tiempo y los atajos, en una pantalla de 1440 px.
-ALTO_PANEL_TAGUEO = 430
+# Alto (px) de la tarjeta de tagueo, al lado del video: entran los botones y
+# el gráfico de eventos con el historial plegado (medido: 736 px). Si se abre
+# el historial, se recorre con scroll dentro de la tarjeta y no empuja la fila
+# de abajo.
+ALTO_PANEL_TAGUEO = 740
 
 _MODOS_VISOR = {
     "dividido": ":material/splitscreen_left: Dividido",
@@ -505,10 +507,9 @@ def main():
 
         with col_tagueo:
             # ── Tagueo one-click (Luci) ────────────────
-            # Alto fijo con scroll interno: los botones quedan arriba, al lado
-            # del video, y el historial (largo) se recorre dentro de la
-            # tarjeta. Sin esto la fila de abajo (cancha y métricas) arrancaba
-            # debajo de todo el historial.
+            # Alto fijo: botones y gráfico a la vista; el historial abierto
+            # se recorre dentro de la tarjeta. Sin esto la fila de abajo
+            # (cancha y métricas) arrancaba debajo de todo el historial.
             with st.container(border=True, key="panel_tagueo", height=ALTO_PANEL_TAGUEO):
                 render_tagging_panel()
     elif vista == "jugadores":
