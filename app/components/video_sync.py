@@ -81,6 +81,10 @@ _UMBRAL_CAMBIO_SEG = 0.05
 _HTML = """
 <div id="video-sync-wrap">
   <video id="video-sync-el" controls playsinline></video>
+  <div id="video-sync-mini" hidden>
+    <button id="video-sync-play" type="button">▶ Reproducir</button>
+    <span id="video-sync-tiempo"></span>
+  </div>
 </div>
 """
 
@@ -96,6 +100,24 @@ _CSS = """
   background: var(--st-secondary-background-color, #181c25);
   line-height: 0;   /* <video> es inline por default: sin esto queda un hueco de unos px abajo */
 }
+/* Modo mini ("Solo cancha"): el video sigue cargado y reproduciendo —es lo
+   que hace avanzar el tiempo de la cancha— pero no se ve; queda solo un
+   botón de reproducir/pausar y el tiempo. No se usa display:none para que
+   el navegador no deje de decodificarlo. */
+#video-sync-wrap.mini { border: none; background: transparent; line-height: normal; position: relative; }
+#video-sync-wrap.mini #video-sync-el {
+  position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none;
+}
+#video-sync-mini { display: flex; align-items: center; gap: 12px; }
+#video-sync-mini[hidden] { display: none; }
+#video-sync-play {
+  font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+  padding: 6px 14px; border-radius: var(--st-base-radius, 8px);
+  border: 1px solid var(--st-primary-color, #c3ff00);
+  background: transparent; color: var(--st-primary-color, #c3ff00);
+}
+#video-sync-play:focus-visible { outline: 2px solid var(--st-primary-color, #c3ff00); outline-offset: 2px; }
+#video-sync-tiempo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; opacity: 0.8; }
 #video-sync-el {
   display: block;
   width: 100%;
@@ -138,6 +160,31 @@ export default function (component) {
   if (video.getAttribute("src") !== nextSrc) {
     video.setAttribute("src", nextSrc)
   }
+
+  // Modo mini: el video oculto y un botón propio de reproducir/pausar.
+  const wrap = parentElement.querySelector("#video-sync-wrap")
+  const mini = parentElement.querySelector("#video-sync-mini")
+  const boton = parentElement.querySelector("#video-sync-play")
+  const etiqueta = parentElement.querySelector("#video-sync-tiempo")
+  wrap.classList.toggle("mini", !!data?.mini)
+  mini.hidden = !data?.mini
+  const mmss = (s) => {
+    if (!Number.isFinite(s)) return "--:--"
+    const m = Math.floor(s / 60), r = Math.floor(s % 60)
+    return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`
+  }
+  const pintarMini = () => {
+    boton.textContent = video.paused ? "▶ Reproducir" : "⏸ Pausar"
+    etiqueta.textContent = `${mmss(video.currentTime)} / ${mmss(video.duration)}`
+  }
+  if (!parentElement._videoSyncMini) {
+    boton.addEventListener("click", () => { video.paused ? video.play() : video.pause() })
+    for (const ev of ["play", "pause", "timeupdate", "loadedmetadata", "seeked"]) {
+      video.addEventListener(ev, pintarMini)
+    }
+    parentElement._videoSyncMini = true
+  }
+  pintarMini()
 
   // Salto pedido desde Python ({id, t}): se aplica una vez por id. Una
   // instancia recién montada (se volvió a la Mesa Táctica, o se cambió de
@@ -337,7 +384,8 @@ def _servidor_videos() -> _ServidorVideos:
 
 
 def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = None,
-                              al_tecla: Callable[[dict], None] | None = None) -> float | None:
+                              al_tecla: Callable[[dict], None] | None = None,
+                              mini: bool = False) -> float | None:
     """
     Reproductor de video que expone su tiempo de reproducción a Python.
 
@@ -358,6 +406,9 @@ def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = N
         salto: {"id": int, "t": segundos} — lleva el video a `t`. Se aplica
             una sola vez por `id` (pasar el mismo dict en cada corrida no
             vuelve a saltar), y siempre al montarse una instancia nueva.
+        mini: True para no mostrar el video, solo un botón de reproducir/pausar
+            y el tiempo ("Solo cancha"): el video sigue reproduciendo y
+            marcando el tiempo de la cancha, y los atajos siguen andando.
         al_tecla: se llama con {"accion": "tag", "n": 1–9, "t": segundos} o
             {"accion": "equipo", "equipo": "home"|"away"} cuando se aprieta un
             atajo de tagueo (espacio y flechas los resuelve el propio video).
@@ -386,6 +437,7 @@ def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = N
     datos = {"intervaloMs": INTERVALO_SONDEO_MS, "umbralSeg": _UMBRAL_CAMBIO_SEG}
     if salto is not None:
         datos["salto"] = {"id": int(salto["id"]), "t": float(salto["t"])}
+    datos["mini"] = bool(mini)
     if video_path.stat().st_size <= LIMITE_ESTATICO_BYTES:
         datos["src"] = _asegurar_video_estatico(video_path)
     else:

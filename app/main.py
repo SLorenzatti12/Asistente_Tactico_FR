@@ -290,7 +290,7 @@ _MODOS_VISOR = {
 
 
 @st.fragment
-def _panel_sincronizado(df: pd.DataFrame, match: dict, mostrar_video: bool, mostrar_cancha: bool,
+def _panel_sincronizado(df: pd.DataFrame, match: dict, hay_video: bool, mostrar_video: bool, mostrar_cancha: bool,
                         hueco_video, hueco_tiempo, col_cancha, col_metricas) -> None:
     """
     Video + slider manual + mapa 2D + métricas, en un mismo st.fragment:
@@ -313,16 +313,21 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, mostrar_video: bool, most
         # slider tira error si su value queda por encima del max de este.
         st.session_state["current_time"] = min(st.session_state["current_time"], duracion)
 
-        # El componente de video se vuelve a montar cada vez que reaparece
-        # (otra vista, otro modo del visor, otro partido) y arrancaría en
-        # 0:00: se le pide que retome donde está el mapa.
-        if mostrar_video and not st.session_state.get("_video_visible"):
+        # El video siempre se monta si existe: es lo que hace avanzar el
+        # tiempo. En "Solo cancha" va en modo mini (oculto, con un botón de
+        # reproducir/pausar arriba de la barra). El componente se vuelve a
+        # montar cada vez que cambia de lugar (otra vista, otro modo del
+        # visor, otro partido) y arrancaría en 0:00: se le pide que retome
+        # donde está la cancha.
+        lugar = ("completo" if mostrar_video else "mini") if hay_video else None
+        if lugar and st.session_state.get("_video_lugar") != lugar:
             _pedir_salto(st.session_state["current_time"])
-        st.session_state["_video_visible"] = mostrar_video
+        st.session_state["_video_lugar"] = lugar
 
-        if mostrar_video:
-            with hueco_video:
-                st.html(_html_panel("Cámara · video anotado", "RF-DETR + ByteTrack"))
+        if lugar:
+            with hueco_video if lugar == "completo" else st.container():
+                if lugar == "completo":
+                    st.html(_html_panel("Cámara · video anotado", "RF-DETR + ByteTrack"))
                 # None salvo en la corrida exacta en que el video reportó un
                 # tiempo nuevo (ver el docstring de render_video_sincronizado
                 # para el porqué) — por eso alcanza con "si no es None, lo
@@ -334,6 +339,7 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, mostrar_video: bool, most
                 tick = render_video_sincronizado(
                     match["tracked_video"], key=f"video_{match['name']}",
                     salto=st.session_state.get("_salto"), al_tecla=_atajo_de_teclado,
+                    mini=lugar == "mini",
                 )
                 if tick is not None:
                     st.session_state["current_time"] = tick
@@ -393,7 +399,7 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, mostrar_video: bool, most
                 f"<span>{format_time(duracion)}</span></div>",
                 unsafe_allow_html=True,
             )
-        if mostrar_video:
+        if lugar:
             st.html(_html_atajos(st.session_state.get("tag_team") or "home"))
 
     if mostrar_cancha:
@@ -454,7 +460,7 @@ def main():
         return
 
     if match["name"] != st.session_state.get("selected_match"):
-        st.session_state["_video_visible"] = False   # otro partido: video nuevo
+        st.session_state["_video_lugar"] = None   # otro partido: video nuevo
     st.session_state["selected_match"] = match["name"]
 
     df = pd.read_parquet(match["field_parquet"])
@@ -463,7 +469,7 @@ def main():
 
     # Solo se calcula y dibuja la vista elegida.
     if vista != "analisis":
-        st.session_state["_video_visible"] = False
+        st.session_state["_video_lugar"] = None
     if vista == "analisis":
         # El modo del visor cambia la disposición, así que vive afuera del
         # fragmento: cambiarlo redibuja la página entera (pasa pocas veces).
@@ -494,7 +500,7 @@ def main():
             col_cancha, col_metricas = None, st.container()
 
         # ── Video sincronizado + mapa (Nico) + métricas (Nico) ──
-        _panel_sincronizado(df, match, mostrar_video, mostrar_cancha,
+        _panel_sincronizado(df, match, hay_video, mostrar_video, mostrar_cancha,
                             hueco_video, hueco_tiempo, col_cancha, col_metricas)
 
         with col_tagueo:

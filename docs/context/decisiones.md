@@ -492,6 +492,10 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 - **Por qué el video va ancho:** la cámara es panorámica. `sportivo_crop3` mide 1920 × 460, y en una columna de ~300 px el video quedaba de ~70 px de alto. Ahora, en una pantalla de 1440 × 900, mide 922 × 221 px.
 - **La tarjeta de tagueo tiene alto fijo con scroll interno** (`ALTO_PANEL_TAGUEO`). Si no, el historial de eventos empujaba la fila de abajo hasta los ~2.200 px.
 - **El modo del visor quedó fuera del fragmento**, porque cambia la disposición. Cambiarlo redibuja la página entera.
+- **"Solo cancha" también reproduce.** El video no se ve, pero sigue montado en modo mini: un botón de reproducir/pausar y el tiempo, arriba de la barra. Es el video el que hace avanzar el tiempo de la cancha. Antes, en ese modo, no había forma de ponerla a correr. Los atajos andan igual.
+  - El video oculto es de 1 px, no `display:none`, para que el navegador no deje de decodificarlo.
+  - Al cambiar entre "completo" y "mini" el componente se vuelve a montar y retoma donde está la cancha (`_video_lugar`).
+  - Verificado en el navegador: en "Solo cancha", reproducir avanza la cancha (5:02 → 5:05); al volver a "Dividido", el video sigue en 5:05.
 - En la columna de métricas, los números van más chicos, con un estilo limitado al contenedor `panel_metricas`.
 - **Verificado en el navegador** con teclas reales sobre `sportivo_crop3`:
   - espacio y flechas mueven el video lo esperado;

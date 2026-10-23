@@ -31,3 +31,21 @@ Santi pasó su parte (`main.py`, `config.toml`, `tactical_patterns_view.py`, `vi
   - historial como lista compacta.
 - **Semáforo (etapa 5):** fila de contadores (destacados / regulares / bajos) con `st.metric`, y grilla de tarjetas por jugador del plantel con los tres estados como botones. Opcionales: notas por jugador e informe para copiar a WhatsApp.
 - **Atajos de teclado (22/10/2026):** <kbd>1</kbd>–<kbd>9</kbd> taguean con el botón N de tu botonera, en el orden en que se ven (de izquierda a derecha y de arriba hacia abajo), y <kbd>L</kbd>/<kbd>V</kbd> cambian `tag_team`. Usan tus funciones (`get_event_types_for_team`, `save_event`) desde `main.py`; tu archivo no se tocó. Sugerencia: mostrar el número en cada botón (por ejemplo "1 · Presión"), como las teclas del mockup. Hoy está en una leyenda debajo del slider.
+
+## Historial de eventos como desplegable (pedido de Santi, 22/10/2026)
+
+En la Mesa táctica, la tarjeta de tagueo va al lado del video, con alto fijo. Santi quiere que se vean solo los botones y el gráfico, y que el historial de eventos quede en un desplegable cerrado. El cambio va en `render_tagging_panel()`, al final:
+
+```python
+        st.divider()
+        _render_events_cards(events_df)
+```
+
+por:
+
+```python
+        with st.expander(f"Historial de eventos ({len(events_df)})", expanded=False):
+            _render_events_cards(events_df)
+```
+
+Si `_render_events_cards` ya pone su propio título ("Editar eventos"), se puede sacar, porque el desplegable ya lo nombra.
