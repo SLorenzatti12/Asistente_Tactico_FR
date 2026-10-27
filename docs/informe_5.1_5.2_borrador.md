@@ -95,6 +95,7 @@ Van en un `.env` que está en `.gitignore`. En el repositorio solo está `.env.e
 | Instalación completa desde cero en una segunda máquina, siguiendo el README | **[completar]** |
 | Etiqueta de la versión de entrega (p.ej. `entrega-final-2026-11-16`) | **[completar]** |
 | Regenerar en H.264 los videos anotados viejos (`partido_clip`, `partido_clip2`) | Santi |
+| Aplicar la seguridad de la nube en el proyecto real (`8-base-de-datos-hibrida.md` → "Seguridad de la nube") y correr `scripts/verificar_rls.py` | Nico (tiene el acceso al proyecto) |
 | (Opcional) instancia pública con datos sintéticos | **[completar]** |
 
 ---
@@ -127,23 +128,23 @@ Autenticación local (usuario y contraseña, sin internet). La autorización se 
 | Ver Mesa táctica, Jugadores, Patrones | Sí | Sí | Sí | Sí |
 | Taguear eventos (botones y teclado) | Sí | Sí | No | No |
 | Configurar el partido (equipo, video) | Sí | Sí | No | No |
-| Gestionar el plantel | Sí | Sí | No (ver nota) | No |
-| Ver el Semáforo | Sí | Hoy no (ver nota) | Sí | Hoy no (ver nota) |
+| Ver los eventos tagueados (gráficos, historial, ir al momento) | Sí | Sí | Sí | Sí |
+| Editar o borrar eventos; configurar tipos de evento | Sí | Sí | No | No |
+| Ver el plantel | Sí | Sí | Sí | Sí |
+| Gestionar el plantel (alta y baja) | Sí | Sí | No | No |
+| Ver el Semáforo (última calificación, quién y cuándo) | Sí | Sí | Sí | Sí |
 | Calificar en el Semáforo | Sí | No | Sí | No |
 | Administrar usuarios y ver el registro de accesos | Sí | No | No | No |
+| Acceso a la base en la nube | Solo el sync, con la clave secreta, desde la máquina que sincroniza | | | |
 
-**Nota:** falta un modo de solo lectura en el Semáforo y en el plantel. Mientras tanto:
-- el Semáforo lo ven solo quienes califican;
-- el cuerpo técnico todavía puede abrir "Gestionar plantel" desde el Semáforo.
-
-**[completar]:** dueños de esos módulos (Luci y Nico), o el equipo si ellos no llegan.
+Quien no tiene un permiso ve la pantalla en solo lectura: los controles no se dibujan, y por lo tanto no se pueden ejecutar.
 
 ### Matriz de riesgos de seguridad
 
 | ID | Riesgo | Prob. | Impacto | Medida | Estado |
 |---|---|---|---|---|---|
 | R1 | **Pérdida o corrupción de la base** (está en una sola laptop; ya hubo archivos corruptos por iCloud) | Media | Alto | Respaldo automático diario, verificable (SHA-256 y `integrity_check`), con restauración probada; repo fuera de iCloud | **Hecha** la parte técnica · falta definir el disco externo (`ANALIZADOR_DIR_RESPALDOS`) |
-| R2 | **Lectura o escritura de la base en la nube** con la key pública (RLS desactivada) | Media | Alto | Key solo en `.env`; activar RLS con políticas y Supabase Auth | **Pendiente** |
+| R2 | **Lectura o escritura de la base en la nube** con la clave pública (RLS desactivada) | Media | Alto | RLS en todas las tablas sin acceso para la clave pública (`db/rls_cloud.sql`); sync con la clave secreta, solo en la máquina que sincroniza; verificación con `scripts/verificar_rls.py` | **En curso**: probado contra un Postgres local que imita a Supabase · falta aplicarlo en el proyecto real (Nico) |
 | R3 | **Laptop desatendida** con la sesión abierta, o alguien en la misma red | Media | Medio | Login con roles; cierre a los 30 min sin uso; el dashboard escucha solo en `localhost` | **Hecha** |
 | R4 | **Contraseñas adivinables** o fuerza bruta | Media | Medio | Hash scrypt con sal; mínimo 8 caracteres; bloqueo tras 5 fallidos durante 15 min; mensajes genéricos | **Hecha** |
 | R5 | **Claves en el repositorio** | Baja | Alto | `.env` y `secrets.toml` en `.gitignore`; `.env.example` sin valores; historial revisado sin claves | **Hecha** |
@@ -168,7 +169,10 @@ La **inyección SQL** se revisó y queda cubierta (ver medidas). No figura como 
 | Consultas parametrizadas (`?`); los nombres de tabla o columna salen de listas fijas del código | Confidencialidad, integridad | `src/db/`, `tagging.py` | CP-10 |
 | Secretos fuera del repositorio | Confidencialidad | `.gitignore`, `.env.example` | CP-11 |
 | Respaldo verificable y restauración | Disponibilidad, integridad | `src/db/respaldo.py`, `scripts/respaldo.py` | CP-12, CP-13, CP-14 |
-| Registro de accesos y acciones críticas, sin contraseñas | Integridad (trazabilidad) | `src/db/registro_repo.py` | CP-15 |
+| Registro de accesos y acciones críticas, sin contraseñas | Integridad (trazabilidad) | `src/db/registro_repo.py` | CP-15, CP-20 |
+| Modos de solo lectura por rol (eventos, Semáforo, plantel) | Integridad, confidencialidad | `tagging.py`, `roster_view.py`, `main.py` | CP-18 |
+| Autor de cada evento y calificación (`created_by`) | Integridad (trazabilidad) | `tagging.py` | CP-19 |
+| RLS en la nube; la clave pública sin acceso; sync con la clave secreta | Confidencialidad, integridad | `db/rls_cloud.sql`, `supabase_client.py` | CP-21, CP-22 |
 | Siempre queda un administrador activo; un admin no puede desactivarse a sí mismo | Disponibilidad | `usuarios_repo.py`, `usuarios_view.py` | CP-16 |
 | Dependencias con versión fija | Integridad, disponibilidad | `requirements.txt` | CP-17 |
 
@@ -184,12 +188,12 @@ La **inyección SQL** se revisó y queda cubierta (ver medidas). No figura como 
 - **Restauración probada** el 27/10/2026, ver CP-13.
 
 **Registro de acciones (tabla `registro`):**
-- **Qué guarda:** ingresos, ingresos fallidos y bloqueados, salidas, sesiones vencidas, altas, cambios de rol, activaciones, cambios de contraseña, respaldos creados y restaurados.
+- **Qué guarda:** ingresos, ingresos fallidos y bloqueados, salidas, sesiones vencidas, altas, cambios de rol, activaciones, cambios de contraseña, respaldos creados y restaurados, ediciones y borrados de eventos (antes y después), altas y bajas del plantel.
 - **Cada fila:** fecha y hora, quién (usuario, `consola` o `sistema`), acción, sobre qué y un detalle.
 - **No guarda** contraseñas ni hashes.
 - **Quién lo ve:** el administrador, en la vista Usuarios ("Registro de accesos y cambios"), o con `scripts/usuarios.py registro`.
 
-**Pendiente:** registrar quién tagueó cada evento y quién calificó cada jugador en el Semáforo (son tablas del módulo de tagueo).
+**Autoría en los datos:** cada evento tagueado y cada calificación del Semáforo guardan quién los hizo (`created_by`). Las calificaciones no se pisan: cada una es una fila nueva, así que queda el historial completo.
 
 ### Marco normativo aplicable
 
@@ -242,3 +246,8 @@ Ejecutados el 27/10/2026 sobre una copia de la base, salvo que se indique otra c
 | CP-15 | Ingreso, fallo, cambio de rol y desactivación | Cada acción queda con fecha, quién, sobre quién y detalle (p.ej. "rol: analyst → coach") | OK |
 | CP-16 | El único admin intenta quitarse el rol o desactivarse | No se permite | OK ("Tiene que quedar al menos un administrador activo"); en la app, sus propios controles están deshabilitados |
 | CP-17 | Instalación de las dependencias en un entorno limpio | Se resuelven sin conflictos | OK con `--dry-run` (244 paquetes) · **[completar]**: instalación completa en otra máquina |
+| CP-18 | Ingresar con cada rol a la Mesa táctica y al Semáforo | Admin y analista taguean y editan; cuerpo técnico y lector ven los eventos sin botonera, ⚙️, editar ni borrar. El Semáforo lo ven todos, y solo admin y cuerpo técnico tienen los botones. El plantel solo lo editan admin y analista | OK (AppTest, los 4 roles, sobre una copia aislada) |
+| CP-19 | Taguear como analista y calificar como cuerpo técnico | `created_by` = el usuario; el lector ve "🟢 destacado · por t_cuerpo · fecha" | OK (AppTest) |
+| CP-20 | Editar y borrar un evento; agregar y sacar un jugador del plantel | Queda en el registro, con quién, el antes y el después del evento y quién lo había tagueado | OK (edición y borrado en el navegador; plantel con AppTest) |
+| CP-21 | Con la clave pública: leer, insertar, modificar y borrar en las tablas, y subir o listar videos | Todo rechazado; con la clave secreta (sync) todo funciona; correr el SQL dos veces da lo mismo | OK en un Postgres local que imita a Supabase · **[completar]**: `scripts/verificar_rls.py` contra el proyecto real |
+| CP-22 | Cargar la clave pública donde va la secreta, y al revés | El sync no arranca y explica el error | OK |

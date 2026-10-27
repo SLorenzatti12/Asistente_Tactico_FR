@@ -75,9 +75,9 @@ Al abrir el dashboard aparece el partido `demo_field`, sin video: solo la cancha
 | Usuario | Rol | Qué ve y qué puede hacer |
 |---|---|---|
 | `admin_demo` | Administrador | Todo, incluida la administración de usuarios y el registro de accesos |
-| `analista_demo` | Analista | Mesa táctica, Jugadores y Patrones; taguea y gestiona el partido |
-| `cuerpo_demo` | Cuerpo técnico | Las vistas anteriores y el Semáforo (califica); no taguea |
-| `lector_demo` | Solo lectura | Mesa táctica, Jugadores y Patrones; no carga ni modifica nada |
+| `analista_demo` | Analista | Todas las vistas; taguea, gestiona el partido y el plantel; el Semáforo en solo lectura |
+| `cuerpo_demo` | Cuerpo técnico | Todas las vistas; califica en el Semáforo; eventos y plantel en solo lectura |
+| `lector_demo` | Solo lectura | Todas las vistas, en solo lectura; no carga ni modifica nada |
 
 ---
 
@@ -104,7 +104,8 @@ Lo que cambia entre instalaciones va en variables de entorno o en un `.env` (cop
 | Variable | Para qué | ¿Obligatoria? |
 |---|---|---|
 | `ROBOFLOW_API_KEY` | Detección en `run_inference.py` | Solo para procesar videos nuevos |
-| `SUPABASE_URL`, `SUPABASE_KEY` | Sync a la nube (`scripts/sync_to_cloud.py`); la key pública, nunca la `service_role` | No |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Sync a la nube (`scripts/sync_to_cloud.py`). La clave **secreta**: con RLS activada (`db/rls_cloud.sql`) es la única con acceso. Solo en la máquina que sincroniza | No |
+| `SUPABASE_KEY` | La clave pública; solo para `scripts/verificar_rls.py`, que comprueba que no tiene acceso | No |
 | `ANALIZADOR_DIR_RESPALDOS` | Dónde guardar los respaldos (por defecto `data/respaldos/`) | No; recomendado: otro disco |
 | `STREAMLIT_CLIENT_SHOW_ERROR_DETAILS` | `full` para ver el traceback en el navegador mientras se desarrolla | No |
 
@@ -188,6 +189,7 @@ src/
   db/                     # Repositorios SQLite (uno por tabla), registro, respaldo, sync a Supabase
 scripts/                  # CLIs: usuarios, respaldo, estadios, partidos, cortar video, sync, datos de prueba…
 db/schema_cloud.sql       # Esquema de la nube (Supabase), idempotente
+db/rls_cloud.sql          # Seguridad de la nube: RLS y sin acceso para la clave pública
 docs/context/             # Contexto del proyecto, arquitectura y decisiones (fuente de verdad)
 mockup/                   # Mockup visual de referencia
 data/                     # Videos, salidas, base y respaldos (fuera del repo)

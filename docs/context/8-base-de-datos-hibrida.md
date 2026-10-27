@@ -6,8 +6,9 @@ Nico
 
 **Vinculado y verificado end-to-end (23/09/2026).** Hay un proyecto real
 de Supabase creado, con `db/schema_cloud.sql` corrido (RLS desactivada a
-propósito — ver `decisiones.md`) y el bucket privado `match-videos`
-creado. Se probó `python scripts/sync_to_cloud.py --all` contra ese
+propósito en ese momento — ver `decisiones.md`; el 27/10/2026 se preparó
+`db/rls_cloud.sql` para activarla, ver "Seguridad de la nube" al final) y
+el bucket privado `match-videos` creado. Se probó `python scripts/sync_to_cloud.py --all` contra ese
 proyecto: un equipo y su plantel subieron correctamente a las tablas
 `teams`/`players`. Las credenciales viven en `.env` (local, gitignored,
 nunca en el repo).
@@ -101,17 +102,23 @@ scripts/estadios.py          # alta/listado de estadios y asignación a partidos
    accesible sin permiso — ver la sección de privacidad en
    `docs/context/proyecto-analizador-tactico.md`). Solo hace falta
    crearlo una vez por proyecto de Supabase.
-4. Dashboard → Settings → API → copiar `Project URL` y la key pública
-   (según la versión del dashboard aparece como `anon public` o como
-   `publishable` — **nunca** la `service_role`/`secret`, esa tiene acceso
-   total sin restricciones).
-5. `cp .env.example .env` y completar esos dos valores.
+2b. Dashboard → SQL Editor → pegar y correr `db/rls_cloud.sql` (RLS: la
+   clave pública queda sin acceso).
+4. Dashboard → Settings → API Keys → copiar `Project URL`, la clave
+   **secreta** (`secret` / `service_role`: la usa el sync) y la pública
+   (`publishable` / `anon`: solo para `scripts/verificar_rls.py`). La
+   secreta tiene acceso total: va **solo** en el `.env` de la máquina que
+   sincroniza (actualizado el 27/10/2026; antes decía "nunca la
+   service_role", cuando el sync usaba la pública sin RLS).
+5. `cp .env.example .env` y completar `SUPABASE_URL`,
+   `SUPABASE_SECRET_KEY` y `SUPABASE_KEY`.
 6. `pip install -r requirements.txt` (agrega `supabase` y `python-dotenv`).
 7. Desde la app: crear al menos un equipo y asignarlo a un partido (panel
    "📁 Partido"), cargar su plantel (tab "🚦 Semáforo" → "Gestionar
    plantel"), y opcionalmente registrar la ruta del video ("🎥 Video del
    partido").
-8. Probar: `python scripts/sync_to_cloud.py --all`.
+8. Probar: `python scripts/sync_to_cloud.py --all` y
+   `python3 scripts/verificar_rls.py`.
 
 ## Pendiente / próximos pasos
 
@@ -132,7 +139,52 @@ scripts/estadios.py          # alta/listado de estadios y asignación a partidos
   El dashboard local ya tiene login propio y offline (26/10/2026, tabla
   `usuarios` en SQLite, mismos cuatro roles). Esos usuarios y sus hashes
   **no** se sincronizan: si se agrega login en la nube, va con Supabase Auth.
-- Activar Row Level Security con políticas reales — hoy está desactivada
-  a propósito porque no hay auth ni políticas escritas todavía (ver
-  `decisiones.md`). Mientras tanto, cualquiera con la key pública del
-  proyecto puede leer/escribir estas tablas directo, sin pasar por la app.
+- ~~Activar Row Level Security~~ **SQL listo y probado (27/10/2026), falta
+  aplicarlo en el proyecto real:** ver "Seguridad de la nube" más abajo.
+  Hasta que se aplique, cualquiera con la key pública puede leer y escribir
+  estas tablas directo, sin pasar por la app.
+- Políticas por club y rol para `authenticated`, cuando haya login en la
+  nube (Supabase Auth) y una vista para usarlo.
+
+## Seguridad de la nube: RLS y clave secreta (27/10/2026)
+
+Santi, con el OK de Nico. Detalle y por qué en `decisiones.md` ("Supabase: RLS activada y sync con clave secreta").
+
+**Qué cambia:**
+- Con RLS activada, la clave pública (publishable/anon) ya **no lee ni escribe nada**.
+- El sync pasa a usar la clave **secreta** (`SUPABASE_SECRET_KEY`), que solo vive en el `.env` de la máquina que sincroniza.
+
+**Pasos, una vez, para quien tenga acceso al dashboard del proyecto (hoy Nico). Hacerlos en este orden, para no cortar el sync:**
+
+1. **Cargar la clave secreta.** En Dashboard → Settings → API Keys, copiar la clave **secret** (`sb_secret_…`; en proyectos con las claves viejas, la `service_role`) y agregarla al `.env` de la máquina que sincroniza:
+
+   ```
+   SUPABASE_SECRET_KEY=<clave secreta>
+   ```
+
+   - Nunca en el repo ni en `.streamlit/secrets.toml`.
+   - Dejar `SUPABASE_KEY` con la pública: la usa el paso 4.
+2. **Probar el sync con la clave nueva:**
+
+   ```bash
+   python3 scripts/sync_to_cloud.py --all
+   ```
+
+   Tiene que andar igual que antes.
+3. **Activar RLS:** en Dashboard → SQL Editor, pegar `db/rls_cloud.sql` entero y correrlo (Run).
+   - Es idempotente.
+   - La tabla del final tiene que dar `rls = true` y `anon_puede = false` en todas las filas.
+   - Si en Storage había políticas abiertas para el bucket, aparecen como "Política de Storage borrada: …".
+4. **Verificar contra el proyecto real:**
+
+   ```bash
+   python3 scripts/verificar_rls.py
+   ```
+
+   - Tiene que terminar en "N de N controles OK".
+   - Si algo falla, el script dice qué. Si algo se pudo escribir con la clave pública, lo borra.
+5. **Volver a probar el sync** (`--all`).
+
+**Si algo sale mal:** `alter table public.<tabla> disable row level security;` vuelve una tabla al estado anterior. No hace falta: el sync con la clave secreta no depende de RLS.
+
+**Rotación:** si la clave secreta se filtra (repo, captura, mensaje), revocarla en Dashboard → API Keys, generar otra y cambiarla en el `.env`. La pública filtrada ya no da acceso a nada.

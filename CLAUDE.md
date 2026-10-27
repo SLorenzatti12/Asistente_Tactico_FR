@@ -85,7 +85,7 @@ python scripts/partidos.py alta "<partido>" --t1 <video_t1> --t2 <video_t2> --es
 python src/homography/calibrate.py data/videos/<video_t2>.mp4 --desde-calibracion data/videos/<video_t1>.mp4
 ```
 
-Sync manual a la nube (Supabase) — solo con internet, nunca requerido en cancha; ver `8-base-de-datos-hibrida.md` para el setup (proyecto Supabase, `db/schema_cloud.sql`, bucket privado `match-videos`, `.env` a partir de `.env.example`):
+Sync manual a la nube (Supabase) — solo con internet, nunca requerido en cancha; ver `8-base-de-datos-hibrida.md` para el setup (proyecto Supabase, `db/schema_cloud.sql` y después `db/rls_cloud.sql`, bucket privado `match-videos`, `.env` a partir de `.env.example`). El sync usa la clave **secreta** (`SUPABASE_SECRET_KEY`, solo en el `.env` de la máquina que sincroniza): con RLS activada, la pública no tiene acceso. `python3 scripts/verificar_rls.py` lo comprueba contra el proyecto real:
 
 ```bash
 python scripts/sync_to_cloud.py --all
@@ -98,9 +98,9 @@ python scripts/sync_to_cloud.py <match_name>
 
 - `map_view.py` — mapa 2D (Plotly) + panel de métricas tácticas, a partir del DataFrame `frame, time_sec, track_id, class_name, field_x, field_y[, team]`.
 - `video_sync.py` — reproductor de video custom (Custom Component v2) que expone `video.currentTime` a Python; reemplaza a `st.video()` porque ese no permite leer en qué segundo va la reproducción. Acepta `salto={"id", "t"}` para llevar el video a un segundo (cada id se aplica una vez), y escucha los atajos de teclado (espacio, flechas, 1–9 para tagear, L/V para el equipo); los tags por teclado los guarda `main.py` con las funciones de `tagging.py`. Videos de hasta 200 MB: hardlink autogenerado en `app/static/` (gitignorado, no tocar a mano; ahí queda solo el del partido abierto). Más grandes: un servidor local con *range requests* que arranca solo con el dashboard (Streamlit no sirve estáticos de más de 200 MB, y desactiva todos si `app/static/` pasa 1 GB).
-- `tagging.py` — botonera de tagueo one-click, eventos, y el tab de Semáforo post-partido. Dueño de `data/db/analizador.sqlite` (`init_db()`, tablas `events`/`event_types`/`semaforo`).
+- `tagging.py` — botonera de tagueo one-click, eventos, y el tab de Semáforo post-partido. Dueño de `data/db/analizador.sqlite` (`init_db()`, tablas `events`/`event_types`/`semaforo`). Modo solo lectura según el rol (`render_tagging_panel(solo_lectura=...)`, `render_semaforo_tab(..., puede_calificar=..., puede_gestionar_plantel=...)`; los decide `main.py`), y `created_by` en eventos y calificaciones.
 - `player_stats_view.py` — estadísticas individuales, sobre `src/analysis/player_stats.py`.
-- `team_selector.py`, `roster_view.py`, `video_registry.py` — capa de base de datos híbrida (ver abajo).
+- `team_selector.py`, `roster_view.py`, `video_registry.py` — capa de base de datos híbrida (ver abajo). `roster_view` muestra el plantel en solo lectura sin el permiso `gestionar_plantel`, y registra altas y bajas.
 - `sesion.py`, `usuarios_view.py` — login local, menú del usuario, permisos por rol (`puede(...)`) y administración de usuarios (solo admin), sobre `src/db/usuarios_repo.py`.
 - `theme.py` — única fuente de colores/tipografía; debe mantenerse sincronizado a mano con `.streamlit/config.toml` (Streamlit no permite leer ese `.toml` desde Python, así que la paleta vive duplicada en los dos lugares a propósito — ver comentarios en ambos archivos si hay que tocar un color).
 
@@ -133,6 +133,6 @@ Piezas locales (`src/db/`), cada una dueña de su propia tabla en el mismo archi
 - `video_repo.py` — ruta local del video crudo de cada partido, y si ya se subió.
 - `local.py` — helpers de solo-lectura sobre `events`/`semaforo` (tablas de `tagging.py`) para el sync.
 - `sync.py` — orquesta el sync: plantel como mirror completo por equipo (upsert + borra en la nube lo que ya no está local), sube el video real a un bucket **privado** de Supabase Storage (`match-videos`), y sincroniza eventos/calificaciones. Todo vía `scripts/sync_to_cloud.py`, nunca desde un botón de Streamlit (subir un video de cientos de MB colgaría la interfaz síncrona de Streamlit).
-- `supabase_client.py` — único punto de conexión (lee credenciales de `.env` / `secrets.toml` / env vars).
+- `supabase_client.py` — único punto de conexión. `get_client()` usa la clave secreta (`SUPABASE_SECRET_KEY`, solo de env/`.env`, nunca de `secrets.toml`) y rechaza la pública; `get_client_publico()` solo para `scripts/verificar_rls.py`.
 
 `db/schema_cloud.sql` es el DDL del lado Supabase — se pega a mano en el SQL Editor del proyecto, es idempotente (`create table if not exists`).

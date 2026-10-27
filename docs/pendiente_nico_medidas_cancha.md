@@ -101,3 +101,18 @@ El dashboard tiene login local y cuatro roles (ver decisiones.md, "Login local y
 
 - **`roster_view.py`:** el alta y la baja del plantel deberían quedar solo para `puede("gestionar_plantel")` (`from components.sesion import puede`). Hoy se abre desde el Semáforo, que ve el cuerpo técnico.
 - **Sync (`src/db/sync.py`):** la tabla local `usuarios` (con los hashes de las contraseñas) **no** se tiene que subir a Supabase. Si algún día se agrega login en la nube, va con Supabase Auth y la tabla `users` de `db/schema_cloud.sql`.
+
+### Hecho por Santi con tu OK (27/10/2026)
+
+- **`roster_view.py`:** `render_roster_manager(team_id, solo_lectura=False)`.
+  - Sin `gestionar_plantel` (o con `solo_lectura=True`), muestra la lista sin alta ni baja. El permiso se vuelve a chequear adentro.
+  - Cada alta y baja queda en el registro de accesos.
+- **Supabase (RLS):** el SQL y el código están listos y probados contra un Postgres local que imita a Supabase. **Falta aplicarlo en el proyecto real, que es tuyo.** Los pasos, en orden, están en `docs/context/8-base-de-datos-hibrida.md` → "Seguridad de la nube":
+  1. cargar `SUPABASE_SECRET_KEY` en tu `.env`;
+  2. probar el sync;
+  3. correr `db/rls_cloud.sql` en el SQL Editor;
+  4. `python3 scripts/verificar_rls.py`;
+  5. volver a probar el sync.
+  - `get_client()` ahora usa la clave secreta y rechaza la pública.
+  - `sync.py` no cambió.
+  - Los usuarios locales siguen sin subirse.

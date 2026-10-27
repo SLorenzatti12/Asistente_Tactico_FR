@@ -69,7 +69,9 @@ con esa key pública puede leer/escribir las tablas directo contra la API
 de Supabase, sin pasar por la app. Aceptable para esta etapa (proyecto de
 facultad, un solo equipo, sin datos sensibles de terceros); revisar
 cuando se agregue Auth — ver el pendiente correspondiente en
-`8-base-de-datos-hibrida.md`.
+`8-base-de-datos-hibrida.md`. **Reemplazado el 27/10/2026:** RLS activada
+y el sync pasa a la clave secreta; ver "Supabase: RLS activada y sync con
+clave secreta (27/10/2026)" más abajo.
 
 ## Versiones fijadas de detección/tracking + línea base de regresión (13/10/2026)
 
@@ -587,10 +589,7 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 **Límites:**
 - **Es control de la pantalla, no de los datos:** quien tenga acceso a los archivos de la laptop puede leer la base y los parquets.
 - **Los usuarios y sus hashes no se sincronizan a Supabase.**
-- **Faltan modos de solo lectura en archivos de Luci y Nico** (anotado en sus notas de pendientes). Mientras tanto:
-  - el Semáforo lo ven solo admin y cuerpo técnico;
-  - el cuerpo técnico, desde el Semáforo, todavía puede abrir "Gestionar plantel";
-  - quien no taguea no ve el gráfico ni el historial de eventos.
+- ~~Faltan modos de solo lectura en archivos de Luci y Nico~~ **Resuelto el 27/10/2026:** ver "Roles en tagueo, Semáforo y plantel; autor de cada evento y calificación".
 
 **Verificado (AppTest sobre una copia de la base, con un usuario de cada rol):**
 - clave incorrecta rechazada;
@@ -653,10 +652,75 @@ También se probó en el navegador (pantalla de ingreso, menú del usuario y vis
 
 **Visto de paso, sin relación con esto:** `partido_clip` y `partido_clip2` siguen con el video anotado en el códec viejo (`mpeg4`), que Chromium no reproduce. Se arregla con `scripts/regenerar_video_anotado.py`, como ya se hizo con `sportivo_crop3`.
 
-**Falta (archivos de Luci y Nico, o decisiones pendientes):**
-- modos de solo lectura del Semáforo, del plantel y del historial de eventos;
-- registrar quién tagueó cada evento y quién calificó el semáforo;
-- RLS en Supabase.
+**Falta (archivos de Luci y Nico, o decisiones pendientes):** ~~modos de solo lectura, autor de eventos y calificaciones, RLS en Supabase~~ — hechos el 27/10/2026, ver las dos secciones siguientes.
+
+## Roles en tagueo, Semáforo y plantel; autor de cada evento y calificación (27/10/2026)
+
+**Quién lo hizo:** Santi, con el OK de Luci y de Nico (están con otros proyectos). Toca archivos de los dos: `tagging.py` (Luci) y `roster_view.py` (Nico). Cada archivo lo dice en su docstring.
+
+**Qué cambió:**
+- **Semáforo para todos los roles** (`PERMISO_VISTA` pasa a `ver_semaforo`).
+  - Quien no califica (analista, solo lectura) lo ve en solo lectura.
+  - Cada jugador muestra su última calificación, quién la puso y cuándo, también para quien califica (era el "TODO" de la pestaña).
+  - Cada clic sigue agregando una fila (queda el historial), y ahora avisa y refresca.
+- **Plantel:** con `gestionar_plantel` (admin, analista) se edita. Sin ese permiso (cuerpo técnico, solo lectura) se ve la lista sin alta ni baja.
+  - `roster_view.py` vuelve a chequear el permiso adentro, por si otra pantalla lo embebe sin pasar `solo_lectura`.
+- **Panel de eventos en solo lectura** (`render_tagging_panel(solo_lectura=True)`) para quien no taguea: los gráficos y el historial, con el clic para ir al momento, sin botonera, sin ⚙️ de tipos y sin editar ni borrar.
+  - **Cambio de disposición:** el cuerpo técnico y solo lectura vuelven a tener la columna derecha en la Mesa táctica, con "Eventos del partido". El video ya no ocupa todo el ancho para ellos (decisión del 26/10 revertida, porque ahora esa columna les sirve).
+- **Autor:** columnas nuevas `events.created_by` y `semaforo.created_by`, con el usuario del login local. Las agrega `tagging.init_db()` (migración aditiva) y las completan los botones, los atajos de teclado (`main.py`) y el Semáforo.
+  - Las filas anteriores quedan en NULL ("sin dato").
+  - En el historial, el autor aparece al pasar el mouse sobre cada evento.
+  - **No se sincronizan:** en la nube, `created_by`/`rated_by` son uuid de `users`, y los usuarios locales no se suben.
+- **Registro de accesos:** editar un evento (antes → después), borrarlo (con quién lo había tagueado) y cada alta o baja del plantel (son datos personales).
+
+**Verificado:**
+- **AppTest sobre una copia aislada del proyecto** (para no escribir eventos de prueba en la base real), con un usuario por rol:
+
+| Rol | Mesa: botonera / ⚙️ / editar y borrar | Historial (ir al momento) | Semáforo: calificar | Plantel |
+|---|---|---|---|---|
+| Admin | sí / sí / sí | sí | sí | edita |
+| Analista | sí / sí / sí | sí | no (solo lectura) | edita |
+| Cuerpo técnico | no / no / no | sí | sí | solo lectura |
+| Solo lectura | no / no / no | sí | no (solo lectura) | solo lectura |
+
+- **Autoría:** un tag del analista guarda `created_by = t_analista`; una calificación del cuerpo técnico, `t_cuerpo`; el lector la ve como "🟢 destacado · por t_cuerpo · …". Alta y baja de un jugador quedan en el registro con el admin como actor.
+- **En el navegador (misma copia):** editar un evento queda registrado como "#80: Presión · Local · 00:00 → Presión · Local · 00:02"; borrarlo, con "tagueado por t_admin". Editar y borrar se probaron ahí porque AppTest no simula la segunda corrida dentro de un `@st.dialog`.
+- Los AppTest de siempre (roles, seguridad, recorrido general, grupos, historial) sin excepciones.
+
+**Límite que queda:** el Semáforo sigue identificando al jugador por dorsal (`player_number`). Dos jugadores sin dorsal, o con el mismo, comparten la última calificación. Ya estaba así; lo resuelve vincular al id del plantel (pendiente en `8-base-de-datos-hibrida.md`).
+
+## Supabase: RLS activada y sync con clave secreta (27/10/2026)
+
+**Quién lo hizo:** Santi, con el OK de Nico. Reemplaza la decisión del 23/09/2026 ("RLS desactivada por ahora", más arriba).
+
+**El problema:** con RLS desactivada, cualquiera con la clave pública del proyecto podía leer y escribir todas las tablas directo contra la API: plantel con nombres reales, semáforo, eventos, la tabla `users` con emails. Era el riesgo R2 de la matriz de la sección 5.2.
+
+**Decisión:**
+- **RLS activada en las 11 tablas, sin políticas para `anon` ni `authenticated`:** con la clave pública no se lee ni se escribe ninguna fila.
+- **Defensa en profundidad:** además se le sacan a `anon` todos los permisos de tabla, también para las tablas futuras.
+- **Storage:** el bucket `match-videos` queda privado y se borran las políticas que le daban acceso a `anon` o `public` sobre ese bucket.
+- **El sync usa la clave secreta** (`SUPABASE_SECRET_KEY`, rol `service_role`, que saltea RLS).
+  - Va solo en el `.env` de la máquina que sincroniza. No se lee de `st.secrets`, así que la app de Streamlit nunca la tiene.
+  - `get_client()` rechaza la clave pública puesta como secreta (por prefijo `sb_publishable_`/`sb_secret_` o por el rol del JWT de las claves viejas).
+- **Por qué clave secreta y no Supabase Auth:** Auth necesita crear cuentas en la nube y escribir políticas por club y rol, y hoy no hay ninguna pantalla en la nube que lo use. El sync es un script local, el caso de uso típico de la clave secreta.
+  - **Contracara:** quien tenga la laptop que sincroniza tiene la clave con acceso total a la nube. Por eso conviene el cifrado de disco (riesgo R7) y tener la clave solo en esa máquina.
+  - Cuando haya una vista en la nube (el DT mirando el semáforo desde la casa), van Supabase Auth y políticas para `authenticated`.
+
+**Piezas:**
+- `db/rls_cloud.sql`: idempotente; al final muestra una tabla de control (`rls = t`, `anon_puede = f`).
+- `db/schema_cloud.sql`: ahora avisa que después hay que correr el de RLS.
+- `src/db/supabase_client.py`: `get_client()` (secreta) y `get_client_publico()` (solo para verificar).
+- `scripts/verificar_rls.py`: contra el proyecto real, comprueba que la clave pública no lee, no inserta, no lista ni sube videos, y que la secreta lee todo. Si algo se pudo escribir con la pública, lo borra con la secreta y lo informa como FALLA.
+
+**Verificado:**
+- **En un PostgreSQL 14 local que imita a Supabase:** roles `anon`, `authenticated` y `service_role` (con `bypassrls`), los permisos por defecto de Supabase, y un esquema `storage` con políticas abiertas a `anon` y `public` sobre el bucket.
+  - **Antes:** la clave pública leía y llegó a insertar un club.
+  - **Después:** `anon` recibe "permission denied" en las 11 tablas y "violates row-level security" al subir un video, y lista 0 objetos. `service_role` lee, escribe y sube.
+  - El bucket quedó privado; se borraron las dos políticas abiertas y la de otro bucket quedó intacta.
+  - Correrlo dos veces da lo mismo.
+- **`verificar_rls.py` con dos nubes simuladas:** con RLS, 25 de 25 controles OK; sin RLS, detecta las 4 fallas y no deja restos.
+
+**No verificado:** nada de esto se corrió contra el proyecto real de Supabase. Las credenciales no están en esta máquina (están en la de Nico), y aplicarlo es un cambio en la nube que tiene que hacer quien tenga acceso al dashboard. Los pasos están en `8-base-de-datos-hibrida.md` ("Seguridad de la nube"). **Hasta que se apliquen, el riesgo R2 sigue abierto.**
 
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 

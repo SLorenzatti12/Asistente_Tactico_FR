@@ -12,6 +12,10 @@
 -- Cómo correrlo: pegar este archivo entero en el SQL Editor del proyecto
 -- de Supabase (Dashboard → SQL Editor → New query → Run). Es idempotente
 -- (create table if not exists), se puede correr de nuevo sin romper nada.
+--
+-- DESPUÉS, siempre: correr db/rls_cloud.sql (activa Row Level Security y le
+-- saca el acceso a la clave pública). Sin eso, cualquiera con la clave
+-- pública lee y escribe estas tablas.
 -- ============================================================================
 
 create extension if not exists pgcrypto; -- para gen_random_uuid()

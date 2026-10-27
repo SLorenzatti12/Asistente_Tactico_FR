@@ -7,7 +7,9 @@ NO durante el procesamiento en cancha.
     python scripts/sync_to_cloud.py --all
     python scripts/sync_to_cloud.py "belgrano_vs_rival_2026-09-14"
 
-Requiere SUPABASE_URL y SUPABASE_KEY configuradas — ver .env.example.
+Requiere SUPABASE_URL y SUPABASE_SECRET_KEY (la clave secreta del proyecto:
+con RLS activada, la pública ya no tiene acceso) — ver .env.example y
+docs/context/8-base-de-datos-hibrida.md.
 """
 import argparse
 import sys
