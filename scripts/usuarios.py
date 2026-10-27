@@ -11,12 +11,14 @@ Ejemplos:
     python3 scripts/usuarios.py listar
     python3 scripts/usuarios.py contrasena santi        # si alguien se olvidó la suya (y lo desbloquea)
     python3 scripts/usuarios.py registro                # últimos accesos y cambios
+    python3 scripts/usuarios.py demo                    # un usuario de prueba por rol (instalación de prueba)
 
 Roles: admin, analyst (analista), coach (cuerpo técnico), viewer (solo lectura).
 """
 
 import argparse
 import getpass
+import secrets
 import sys
 from pathlib import Path
 
@@ -39,6 +41,24 @@ def _pedir_contrasena() -> str:
         return c1
 
 
+# Usuarios de prueba, uno por rol: para una instalación de prueba o la
+# defensa, no para la laptop del club (ahí, cada persona con su usuario).
+_DEMO = [("admin_demo", "Admin de prueba", "admin"), ("analista_demo", "Analista de prueba", "analyst"),
+         ("cuerpo_demo", "Cuerpo técnico de prueba", "coach"), ("lector_demo", "Solo lectura de prueba", "viewer")]
+
+
+def _demo() -> None:
+    print("Usuarios de prueba (las contraseñas se muestran una sola vez; no quedan guardadas en claro):\n")
+    for usuario, nombre, rol in _DEMO:
+        if usuarios_repo.obtener_por_usuario(usuario) is not None:
+            print(f"  {usuario:<15} ya existe — para otra contraseña: python3 scripts/usuarios.py contrasena {usuario}")
+            continue
+        clave = secrets.token_urlsafe(9)
+        usuarios_repo.crear_usuario(usuario, nombre, rol, clave)
+        print(f"  {usuario:<15} {usuarios_repo.ROLES[rol]:<16} contraseña: {clave}")
+    print("\nPara sacarlos después: desactivarlos desde la vista Usuarios del dashboard.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Usuarios del dashboard",
                                      formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
@@ -50,6 +70,7 @@ def main() -> None:
     sub.add_parser("listar", help="Lista los usuarios")
     registro = sub.add_parser("registro", help="Últimos accesos y cambios")
     registro.add_argument("-n", type=int, default=40, help="Cuántas filas (default 40)")
+    sub.add_parser("demo", help="Crea un usuario de prueba por rol, con contraseñas al azar (solo para probar)")
     contrasena = sub.add_parser("contrasena", help="Pone una contraseña nueva")
     contrasena.add_argument("usuario")
     args = parser.parse_args()
@@ -59,6 +80,9 @@ def main() -> None:
         for f in reversed(registro_repo.listar(limite=args.n)):
             print(f"{f['fecha'].replace('T', ' ')}  {f['actor']:<14} "
                   f"{registro_repo.ACCIONES.get(f['accion'], f['accion']):<42} {f['objetivo'] or '':<16} {f['detalle'] or ''}")
+        return
+    if args.comando == "demo":
+        _demo()
         return
     if args.comando == "listar":
         usuarios = usuarios_repo.listar()
