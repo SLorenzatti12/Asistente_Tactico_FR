@@ -6,11 +6,17 @@ PERSONA C — Botones de tagueo one-click, timeline + tarjetas de eventos
 guardado en SQLite.
 
 Roles (27/10/2026, cambio hecho por Santi con el OK de Luci): el panel de
-eventos y el semáforo tienen modo de solo lectura para los roles que no
-taguean o no califican (ver usuarios_repo.PERMISOS); main.py decide el modo
-según el rol. Cada evento y cada calificación guardan quién los hizo
-(`created_by`), y editar o borrar un evento queda en el registro de accesos
-(src/db/registro_repo.py).
+eventos tiene modo de solo lectura para los roles que no taguean (ver
+usuarios_repo.PERMISOS); main.py decide el modo según el rol. Cada evento
+guarda quién lo tagueó (`created_by`), y editar o borrar un evento queda en
+el registro de accesos (src/db/registro_repo.py).
+
+El semáforo salió de este archivo el 27/10/2026 (también con el OK de
+Luci): ahora es components/semaforo_view.py (planilla por partido, con
+minutos y la valoración del DT, el ayudante y el coordinador, sobre el
+plantel del club) y src/db/semaforo_repo.py. La tabla vieja `semaforo` (una
+fila por dorsal) se sigue creando acá porque el sync a la nube la lee
+(src/db/local.py); ya no se escribe.
 """
 
 import sqlite3
@@ -26,18 +32,11 @@ from streamlit_sortables import sort_items
 # se vea igual en todos lados (ver components/map_view.py).
 from components.map_view import TEAM_COLORS, TEAM_LABELS
 
-# Gestión del plantel por equipo (alta/baja, una sola vez por equipo,
-# reutilizado en todos sus partidos) — Nico, reemplaza la edición manual
-# de data/roster.json por una tabla SQLite (ver src/db/roster_repo.py,
-# src/db/team_repo.py y components/roster_view.py).
-from components.roster_view import render_roster_manager
 from components.sesion import usuario_actual
-from db import roster_repo, team_repo
 # Por src.db (no db): es el mismo módulo que usa sesion.py, así las pruebas
 # que lo apuntan a otra base lo apuntan para los dos.
 from src.db import registro_repo
 
-from theme import STATUS_COLORS
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "db" / "analizador.sqlite"
 
@@ -295,32 +294,6 @@ def delete_event_type(type_id: int) -> None:
     conn.close()
 
 
-def save_semaforo(match_name: str, player_number: int, rating: str, usuario: str | None = None) -> None:
-    """Cada clic agrega una fila (no pisa la anterior): queda el historial de
-    calificaciones, con quién calificó. La vigente es la última."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "INSERT INTO semaforo (match_name, player_number, rating, created_at, created_by) VALUES (?, ?, ?, ?, ?)",
-        (match_name, player_number, rating, datetime.now().isoformat(), usuario),
-    )
-    conn.commit()
-    conn.close()
-
-
-def ultimas_calificaciones(match_name: str) -> dict:
-    """La última calificación de cada dorsal en este partido:
-    {player_number: {"rating", "created_by", "created_at"}}."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    filas = conn.execute(
-        "SELECT player_number, rating, created_by, created_at FROM semaforo "
-        "WHERE match_name = ? ORDER BY id",
-        (match_name,),
-    ).fetchall()
-    conn.close()
-    return {f["player_number"]: dict(f) for f in filas}   # la última pisa a las anteriores
-
-
 def get_events(match_name: str) -> pd.DataFrame:
     """
     Todos los eventos tagueados de este partido (id incluido), orden cronológico.
@@ -343,27 +316,6 @@ def get_events(match_name: str) -> pd.DataFrame:
     )
     conn.close()
     return df
-
-
-def load_roster(match_name: str) -> list[dict]:
-    """
-    Plantel (número + nombre) del equipo asignado a este partido —ver
-    team_repo.get_match_team / components/team_selector.py—, leído de
-    SQLite (tabla `roster`, cargada/editada desde la app — ver
-    render_roster_manager en components/roster_view.py). Es el mismo
-    plantel para todos los partidos de ese equipo — no se carga por
-    partido. Si todavía no se asignó equipo o no se cargó ningún jugador,
-    cae a números sueltos del 1 al 11 para no romper la pantalla de
-    semáforo mientras tanto.
-    """
-    roster_repo.init_roster_table()
-    equipo = team_repo.get_match_team(match_name)
-    if equipo is None:
-        return [{"number": n, "name": f"Jugador #{n}"} for n in range(1, 12)]
-    roster = roster_repo.list_players(equipo["team_id"])
-    if roster:
-        return roster
-    return [{"number": n, "name": f"Jugador #{n}"} for n in range(1, 12)]
 
 
 # ── Fondo según equipo activo ───────────────────────────────────
@@ -913,87 +865,3 @@ def _render_eventos(match_name: str, current_time: float, solo_lectura: bool = F
 
     with st.expander(f"Historial de eventos ({len(events_df)})", expanded=False):
         _render_events_cards(events_df, solo_lectura=solo_lectura)
-
-
-def _inject_semaforo_css() -> None:
-    """
-    Colorea los tres botones del semáforo (🔴🟡🟢) con los colores de estado
-    del tema. Cada botón tiene su propio `key` por jugador (low_3, low_7, ...),
-    así que el selector usa "contiene" ([class*=...]) para pegarle a todos los
-    de un mismo rating con una sola regla, en vez de generar una por jugador.
-
-    Nota: `.st-key-<key>` es la clase que Streamlit genera a partir del `key`
-    del widget — ver "Never use CSS for theming" en la guía de temas: acá se
-    usa CSS a propósito porque st.button no tiene un parámetro de color propio
-    (solo type="primary"/"secondary"), y los 3 colores del semáforo no
-    coinciden con la paleta de tipos de botón.
-    """
-    st.markdown(f"""
-    <style>
-      div[class*="st-key-low_"] button {{ border-color: {STATUS_COLORS["critico"]}; }}
-      div[class*="st-key-mid_"] button {{ border-color: {STATUS_COLORS["alerta"]}; }}
-      div[class*="st-key-high_"] button {{ border-color: {STATUS_COLORS["ok"]}; }}
-    </style>
-    """, unsafe_allow_html=True)
-
-
-_ICONO_RATING = {"bajo": "🔴", "regular": "🟡", "destacado": "🟢"}
-
-
-def render_semaforo_tab(match_name: str, puede_calificar: bool = True, puede_gestionar_plantel: bool = True) -> None:
-    """
-    Formulario de calificación individual post-partido (🔴🟡🟢 por jugador),
-    con la última calificación de cada uno y quién la puso.
-
-    `puede_calificar` / `puede_gestionar_plantel` salen del rol (main.py):
-    sin el primero, la pestaña es de solo lectura; sin el segundo, el
-    plantel se ve pero no se modifica.
-    """
-    _inject_semaforo_css()
-    st.markdown("**Semáforo post-partido**")
-    if puede_calificar:
-        st.caption("Calificación individual — hacé clic para evaluar a cada jugador. "
-                   "Cada clic queda guardado; vale la última.")
-    else:
-        st.caption("Solo lectura: tu rol no califica. Se ve la última calificación de cada jugador.")
-
-    equipo = team_repo.get_match_team(match_name)
-    if equipo is None:
-        st.warning(
-            "Este partido todavía no tiene equipo/categoría asignado — "
-            "asignalo en el panel «📁 Partido» de arriba para poder cargar "
-            "su plantel."
-        )
-    else:
-        titulo = "⚙️ Gestionar plantel" if puede_gestionar_plantel else "Plantel"
-        with st.expander(f"{titulo} — {equipo['team_name']}"):
-            render_roster_manager(equipo["team_id"], solo_lectura=not puede_gestionar_plantel)
-
-    roster = load_roster(match_name)
-    if all(p["name"].startswith("Jugador #") for p in roster):
-        st.caption("⚠️ Todavía no cargaste el plantel de este equipo — mostrando números sueltos.")
-
-    ultimas = ultimas_calificaciones(match_name)
-    usuario = usuario_actual()
-    for idx, player in enumerate(roster):
-        # Las keys se indexan por posición, no por dorsal: el dorsal puede
-        # repetirse o faltar (varios jugadores sin numerar) y Streamlit
-        # exige keys únicas — usar `n` acá rompía el tab entero apenas
-        # había dos jugadores con el mismo número (o ninguno).
-        n = player["number"]
-        col_num, col_btns = st.columns([1, 3])
-        col_num.write(f"**#{n if n is not None else '-'}** {player['name']}")
-        ultima = ultimas.get(n)
-        if ultima:
-            col_num.caption(f"{_ICONO_RATING.get(ultima['rating'], '')} {ultima['rating']} · "
-                            f"por {ultima['created_by'] or 'sin dato'} · {ultima['created_at'][:16].replace('T', ' ')}")
-        elif not puede_calificar:
-            col_num.caption("Sin calificar")
-        if not puede_calificar:
-            continue
-        b1, b2, b3 = col_btns.columns(3)
-        for col, clave, rating in ((b1, "low", "bajo"), (b2, "mid", "regular"), (b3, "high", "destacado")):
-            if col.button(_ICONO_RATING[rating], key=f"{clave}_{idx}"):
-                save_semaforo(match_name, n, rating, usuario["usuario"] if usuario else None)
-                st.toast(f"#{n if n is not None else '-'} {player['name']}: {rating}")
-                st.rerun()

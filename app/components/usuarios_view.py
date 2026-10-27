@@ -22,10 +22,12 @@ if str(_ROOT) not in sys.path:
 from src.db import registro_repo, usuarios_repo  # noqa: E402
 
 ROLES = usuarios_repo.ROLES
+FUNCIONES = usuarios_repo.FUNCIONES
+_SIN_FUNCION = "ninguna"
 DESCRIPCION_ROLES = {
     "admin": "Todo, incluida esta pantalla de usuarios.",
     "analyst": "Taguea en la Mesa táctica, gestiona partidos, plantel y tipos de evento.",
-    "coach": "Ve todo y califica el semáforo. No toca la configuración.",
+    "coach": "Ve todo, carga los minutos del semáforo y valora en la columna de su función (DT, ayudante, coordinador). No toca la configuración.",
     "viewer": "Solo mira: no carga ni modifica nada.",
 }
 
@@ -36,7 +38,12 @@ def _alta(yo: dict) -> None:
         c1, c2 = st.columns(2)
         usuario = c1.text_input("Usuario (para ingresar)", key="alta_usuario_usuario")
         nombre = c2.text_input("Nombre y apellido", key="alta_usuario_nombre")
-        rol = st.selectbox("Rol", list(ROLES), format_func=ROLES.get, index=1, key="alta_usuario_rol")
+        c_rol, c_fun = st.columns(2)
+        rol = c_rol.selectbox("Rol", list(ROLES), format_func=ROLES.get, index=1, key="alta_usuario_rol")
+        funcion = c_fun.selectbox("Función en el cuerpo técnico", [_SIN_FUNCION, *FUNCIONES],
+                                  format_func=lambda f: "Ninguna" if f == _SIN_FUNCION else FUNCIONES[f],
+                                  key="alta_usuario_funcion",
+                                  help="Define qué columna de valoración completa en el semáforo.")
         st.caption(DESCRIPCION_ROLES[rol] if rol else "")
         c3, c4 = st.columns(2)
         contrasena = c3.text_input("Contraseña inicial", type="password", key="alta_usuario_contrasena")
@@ -46,7 +53,8 @@ def _alta(yo: dict) -> None:
                 st.error("Las contraseñas no coinciden.")
                 return
             try:
-                u = usuarios_repo.crear_usuario(usuario, nombre, rol, contrasena, actor=yo)
+                u = usuarios_repo.crear_usuario(usuario, nombre, rol, contrasena, actor=yo,
+                                                funcion=None if funcion == _SIN_FUNCION else funcion)
             except ValueError as e:
                 st.error(str(e))
                 return
@@ -76,6 +84,19 @@ def _editar(usuarios: list[dict], yo: dict) -> None:
                 st.rerun()
             except ValueError as e:
                 st.error(str(e))
+
+        cf1, cf2 = st.columns([2, 1], vertical_alignment="bottom")
+        opciones = [_SIN_FUNCION, *FUNCIONES]
+        funcion = cf1.selectbox("Función en el cuerpo técnico", opciones,
+                                index=opciones.index(u.get("funcion") or _SIN_FUNCION),
+                                format_func=lambda f: "Ninguna" if f == _SIN_FUNCION else FUNCIONES[f],
+                                key=f"editar_funcion_{u['id']}",
+                                help="La columna de valoración que completa en el semáforo.")
+        funcion = None if funcion == _SIN_FUNCION else funcion
+        if cf2.button("Guardar función", key=f"guardar_funcion_{u['id']}", disabled=funcion == u.get("funcion"),
+                      width="stretch"):
+            usuarios_repo.cambiar_funcion(u["id"], funcion, actor=yo)
+            st.rerun()
 
         c3, c4 = st.columns([2, 1], vertical_alignment="bottom")
         nueva = c3.text_input("Contraseña nueva", type="password", key=f"editar_contrasena_{u['id']}",
@@ -112,6 +133,7 @@ def render_usuarios(yo: dict) -> None:
     with col_lista:
         tabla = pd.DataFrame([{
             "Usuario": u["usuario"], "Nombre": u["nombre"], "Rol": ROLES[u["rol"]],
+            "Función": FUNCIONES.get(u.get("funcion"), "—"),
             "Estado": "Activo" if u["activo"] else "Desactivado",
             "Último ingreso": (u["ultimo_ingreso"] or "—").replace("T", " "),
         } for u in usuarios])

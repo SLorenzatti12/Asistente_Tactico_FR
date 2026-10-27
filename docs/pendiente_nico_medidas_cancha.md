@@ -116,3 +116,12 @@ El dashboard tiene login local y cuatro roles (ver decisiones.md, "Login local y
   - `get_client()` ahora usa la clave secreta y rechaza la pública.
   - `sync.py` no cambió.
   - Los usuarios locales siguen sin subirse.
+
+### Plantel con apellido y nombre, y semáforo nuevo (27/10/2026, Santi con tu OK)
+
+- **`roster_repo`:** columnas `apellido` y `nombre` (migración aditiva; las filas viejas se parten por la última palabra).
+  - `add_player(team_id, apellido, nombre, dorsal)` y `update_player(...)` cambiaron de firma.
+  - `full_name` se sigue llenando, así que **el sync del plantel no cambia**.
+  - Se sacó `list_players` (solo lo usaba el semáforo viejo).
+- **`roster_view`:** ahora es `render_plantel` (vista Semáforo → Plantel). Tiene elegir o crear equipo, la plantilla como planilla editable (`st.data_editor`), importar CSV y el registro de cada cambio.
+- **Pendiente para la nube**, cuando apliques la seguridad: subir `semaforo_minutos` y `semaforo_valoraciones`. Son minutos y valoraciones por `players.id` y por función, y reemplazan a `player_ratings` por dorsal. También subir `apellido` y `nombre` a `players`. No se hizo ahora (decisión de Santi).

@@ -46,7 +46,8 @@ la entrada correspondiente en `decisiones.md`.
 | `roster` (plantel por equipo, alta/baja desde la app — ver `src/db/roster_repo.py`) | `matches` (calendario/resultados), `match_videos`, `calibrations`, `tracking_outputs` (solo la ruta al parquet) |
 | `estadios`, `match_estadio` (medidas de cancha por estadio y dónde se jugó cada partido — ver `src/db/estadio_repo.py`; todavía no se sincronizan) | |
 | `match_videos` (ruta local del video de cada partido — ver `src/db/video_repo.py`) | Copias sincronizadas de `events` y `player_ratings`, para consulta remota |
-| `events`, `event_types`, `semaforo` (tal cual las creó/evoluciona `tagging.py`) | Video subido a Supabase **Storage**, bucket privado `match-videos` |
+| `events`, `event_types`, `semaforo` (tal cual las creó/evoluciona `tagging.py`; `semaforo` ya no se escribe desde el 27/10/2026) | Video subido a Supabase **Storage**, bucket privado `match-videos` |
+| `semaforo_minutos`, `semaforo_valoraciones` (planilla por partido: minutos y valoración de DT, ayudante y coordinador por jugador del plantel — ver `src/db/semaforo_repo.py`; **todavía no se sincronizan**) | — (pendiente: reemplazar `player_ratings` por dorsal) |
 | Tracking (`.parquet` en `data/outputs/`) y calibración (`data/calibracion/`) | — |
 
 El plantel se carga **una sola vez por equipo**, no por partido — se

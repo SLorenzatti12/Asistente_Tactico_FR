@@ -687,7 +687,80 @@ También se probó en el navegador (pantalla de ingreso, menú del usuario y vis
 - **En el navegador (misma copia):** editar un evento queda registrado como "#80: Presión · Local · 00:00 → Presión · Local · 00:02"; borrarlo, con "tagueado por t_admin". Editar y borrar se probaron ahí porque AppTest no simula la segunda corrida dentro de un `@st.dialog`.
 - Los AppTest de siempre (roles, seguridad, recorrido general, grupos, historial) sin excepciones.
 
-**Límite que queda:** el Semáforo sigue identificando al jugador por dorsal (`player_number`). Dos jugadores sin dorsal, o con el mismo, comparten la última calificación. Ya estaba así; lo resuelve vincular al id del plantel (pendiente en `8-base-de-datos-hibrida.md`).
+**Límite que queda:** ~~el Semáforo sigue identificando al jugador por dorsal~~ — resuelto el mismo día con el rediseño del Semáforo (sección siguiente).
+
+## Semáforo por partido: plantel del club, minutos y valoración de DT, ayudante y coordinador (27/10/2026)
+
+**Pedido (Santi):** el semáforo no identifica a nadie. El club carga su plantilla y el cuerpo técnico registra minutos y rendimiento. Cada jugador tiene apellido, nombre, minutos jugados y la valoración de tres personas: DT, ayudante de campo y coordinador. Y una vista para crear el plantel.
+
+**Decisiones (Santi):**
+- Cada columna de valoración es de una **función del usuario** (no de un rol). La asigna el admin, y cada uno completa solo la suya.
+- La escala sigue siendo 🔴🟡🟢.
+- La nube se deja para después (ver abajo).
+
+**Quién lo hizo:** Santi, con el OK de Luci (el semáforo era de `tagging.py`) y de Nico (`roster_repo`, `roster_view`).
+
+**Cómo quedó:**
+- **Vista "Semáforo"**, con dos subvistas: "Planilla del partido" y "Plantel".
+  - No se agregó un quinto botón al encabezado, que ya se desbordó una vez con cinco.
+  - Archivo `app/components/semaforo_view.py`.
+- **Planilla del partido:** una fila por jugador del plantel (por su id, no por dorsal), con los minutos y tres semáforos.
+  - **Quién edita qué:**
+    - **Minutos:** cualquiera con permiso de calificar (cuerpo técnico, admin).
+    - **Valoración:** solo la columna de la propia función.
+    - **Columnas ajenas:** se ven como etiquetas de color, con quién y cuándo al pasar el mouse.
+    - **Sin permiso** (analista, solo lectura): todo en solo lectura.
+  - **Guardado:** cada cambio se guarda al momento.
+  - **Datos:** `src/db/semaforo_repo.py`, tablas `semaforo_minutos` y `semaforo_valoraciones`.
+    - Solo agregan filas: vale la última, y queda el historial, visible en "Historial de cambios".
+    - Cada fila guarda el nombre del jugador en ese momento, para que el historial se lea aunque después se le dé de baja.
+  - **El callback de valoración vuelve a chequear la función en el servidor.**
+- **Por partido, no por video:** los dos tiempos de un partido (`partido_tiempos`) comparten la planilla (`clave_partido`). Resuelve el pendiente de Luci del 18/10/2026.
+- **Plantel** (`roster_view.render_plantel`):
+  - elegir o crear el equipo;
+  - la plantilla como planilla editable (apellido, nombre, dorsal opcional), con agregar, corregir y sacar filas y "Guardar cambios";
+  - importar desde un CSV (apellido, nombre[, dorsal]; coma o punto y coma; agrega sin borrar y saltea los que ya están).
+  - Solo lo editan admin y analista. Cada alta, corrección y baja queda en el registro, igual que crear un equipo.
+- **`roster`:** columnas nuevas `apellido` y `nombre`. Migración aditiva: las filas anteriores se parten por la última palabra.
+  - `full_name` se sigue llenando ("Nombre Apellido"), porque lo sube el sync.
+  - Ahora se ordena por apellido.
+- **Usuarios:** columna `funcion` (`dt`, `ayudante`, `coordinador` o vacía), independiente del rol.
+  - Se asigna en la vista Usuarios (alta y edición), y el cambio queda registrado.
+  - Por consola: `scripts/usuarios.py crear … --funcion dt`.
+  - `usuarios.py demo` crea `dt_demo`, `ayudante_demo` y `coordinador_demo`.
+- **Lo que salió de `tagging.py`:** la pestaña vieja (`render_semaforo_tab`, `save_semaforo`, `load_roster`).
+  - La tabla vieja `semaforo` (una fila por dorsal) se sigue creando porque el sync la lee, pero ya no se escribe.
+  - Sus filas (7, de prueba) no se migraron: estaban por dorsal y el plantel real está vacío.
+
+**Verificado:**
+- **Lógica, sobre una copia de la base (19 de 19):**
+  - migración del plantel (idempotente);
+  - detección de altas, correcciones y bajas;
+  - filas vacías ignoradas; apellido obligatorio; dorsal 0–99;
+  - CSV con punto y coma y dorsal opcional; CSV sin apellido da error claro;
+  - un partido para los dos tiempos;
+  - vale la última carga y el historial no se pisa;
+  - rechaza minutos fuera de 0–130, funciones y valoraciones desconocidas;
+  - cambio de función registrado.
+- **AppTest con 7 usuarios** (admin, analista, DT, ayudante, coordinador, cuerpo técnico sin función, lector):
+
+| Usuario | Minutos | Columna editable | Plantel |
+|---|---|---|---|
+| Admin (sin función) | edita | ninguna (se le explica que falta la función) | edita |
+| Analista | solo lectura | ninguna | edita |
+| DT / Ayudante / Coordinador | edita | solo la suya | solo lectura |
+| Cuerpo técnico sin función | edita | ninguna | solo lectura |
+| Lector | solo lectura | ninguna | solo lectura |
+
+- **Cargas:** las del DT y del ayudante quedan con su usuario. Lo que se carga desde el 1° tiempo se ve igual desde el 2°. Alta y cambio de función desde la vista Usuarios.
+- **En el navegador, sobre una copia aislada:**
+  - la planilla con 11 jugadores;
+  - un clic en la columna propia guarda y actualiza el contador;
+  - corregir un nombre en el plantel y guardar queda registrado ("Pirulo #- → Cristian Pirulo #-").
+
+**Pendiente:**
+- **Sync a la nube** de `semaforo_minutos`, `semaforo_valoraciones` y de `apellido`/`nombre`. Hay que cambiar el esquema de la nube (minutos y valoraciones por `players.id` y por función), y conviene hacerlo después de que Nico aplique la seguridad de la nube. Mientras tanto, el sync sigue subiendo la tabla vieja `semaforo`, que ya no recibe filas nuevas.
+- **Excel directo (.xlsx):** necesita `openpyxl`, que no está instalado. Hoy se importa como CSV ("Guardar como → CSV").
 
 ## Supabase: RLS activada y sync con clave secreta (27/10/2026)
 

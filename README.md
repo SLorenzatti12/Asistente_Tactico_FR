@@ -22,7 +22,7 @@ Funciona **100% sin internet**: en las canchas de la liga no hay conectividad co
 | **Detección y tracking** | Modelo propio RF-DETR Small, entrenado en Roboflow (jugador, arquero, árbitro y pelota), con seguimiento de ByteTrack (`src/detection/`) |
 | **Homografía** | Calibración a mano por cámara, con control de calidad automático y verificación de que la cámara no se movió durante el video. Pasa los píxeles a metros, con las medidas reales de cada estadio (`src/homography/`) |
 | **Análisis** | Equipo por color de camiseta, estadísticas por jugador, fases del bloque y "momentos para revisar". Los momentos son una señal experimental, no un diagnóstico (`src/analysis/`) |
-| **Dashboard** | Mesa táctica (video y cancha 2D sincronizados, métricas, tagueo con un clic o con el teclado), Jugadores, Patrones y Semáforo de rendimiento (`app/`) |
+| **Dashboard** | Mesa táctica (video y cancha 2D sincronizados, métricas, tagueo con un clic o con el teclado), Jugadores, Patrones y Semáforo: plantel del club, minutos y valoración de DT, ayudante y coordinador por partido (`app/`) |
 | **Usuarios** | Login local con cuatro roles: administrador, analista, cuerpo técnico y solo lectura |
 | **Datos** | SQLite local; respaldos automáticos y verificables; sync manual y opcional a Supabase |
 
@@ -76,8 +76,10 @@ Al abrir el dashboard aparece el partido `demo_field`, sin video: solo la cancha
 |---|---|---|
 | `admin_demo` | Administrador | Todo, incluida la administración de usuarios y el registro de accesos |
 | `analista_demo` | Analista | Todas las vistas; taguea, gestiona el partido y el plantel; el Semáforo en solo lectura |
-| `cuerpo_demo` | Cuerpo técnico | Todas las vistas; califica en el Semáforo; eventos y plantel en solo lectura |
+| `dt_demo` / `ayudante_demo` / `coordinador_demo` | Cuerpo técnico, cada uno con su función | Carga minutos y valora en la columna de su función; eventos y plantel en solo lectura |
 | `lector_demo` | Solo lectura | Todas las vistas, en solo lectura; no carga ni modifica nada |
+
+**El plantel lo carga el club**, en Semáforo → Plantel: a mano, como planilla, o importando un CSV con columnas `apellido`, `nombre` y (opcional) `dorsal`. Después, en Semáforo → Planilla del partido, el cuerpo técnico carga minutos y valoraciones. Cada usuario del cuerpo técnico necesita su función (DT, ayudante de campo o coordinador), que la asigna el admin en la vista Usuarios.
 
 ---
 

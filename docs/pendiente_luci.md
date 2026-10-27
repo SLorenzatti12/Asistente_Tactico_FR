@@ -71,3 +71,13 @@ Todo lo de arriba quedó hecho en `tagging.py` (ver decisiones.md, "Roles en tag
 - `registro_repo` se importa como `src.db.registro_repo` (no `db.`), para que sea el mismo módulo que usa `sesion.py`.
 
 Para revisar cuando vuelvas: el semáforo sigue identificando por dorsal (dos sin dorsal comparten la última calificación). Ya estaba así antes.
+
+### El semáforo salió de `tagging.py` (27/10/2026, Santi con tu OK)
+
+Rediseño pedido por el club (ver decisiones.md, "Semáforo por partido…"). Ahora es `components/semaforo_view.py`, con los datos en `src/db/semaforo_repo.py`:
+- una fila por jugador del plantel (por id, no por dorsal);
+- minutos jugados;
+- valoración 🔴🟡🟢 del DT, del ayudante y del coordinador, donde cada usuario completa la columna de su función;
+- por **partido**, no por video. Eso resuelve "Semáforo por partido, no por video" (18/10/2026).
+
+De `tagging.py` se sacaron `render_semaforo_tab`, `save_semaforo`, `ultimas_calificaciones` y `load_roster`. La tabla vieja `semaforo` se sigue creando en `init_db()` porque el sync la lee, pero ya no recibe filas.

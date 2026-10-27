@@ -107,8 +107,8 @@ Van en un `.env` que está en `.gitignore`. En el repositorio solo está `.env.e
 | Dato | Dónde vive | Sensibilidad | Quién debe verlo | Riesgo si se filtra |
 |---|---|---|---|---|
 | Video del partido | `data/videos/` (laptop); Storage privado de Supabase si se sincroniza | **Alta**: imagen de personas, posiblemente menores | Cuerpo técnico y analista del club | Exposición de la imagen de los jugadores sin consentimiento; incumplimiento de la Ley 25.326 |
-| Semáforo (calificación de cada jugador por partido) | SQLite; copia en Supabase | **Alta**: valoración de personas | Cuerpo técnico (y administrador) | Conflicto con jugadores o con otros clubes; uso fuera de su finalidad |
-| Plantel (nombre, apellido, dorsal) | SQLite; copia en Supabase | Personal | Cuerpo técnico, analista | Datos personales fuera del club |
+| Semáforo: minutos jugados y valoración del DT, el ayudante y el coordinador, por jugador y partido | SQLite (por ahora no se sube a la nube) | **Alta**: valoración de personas | Cuerpo técnico (y administrador) | Conflicto con jugadores o con otros clubes; uso fuera de su finalidad |
+| Plantel (apellido, nombre, dorsal) | SQLite; copia en Supabase | Personal | Cuerpo técnico, analista | Datos personales fuera del club |
 | Posiciones, métricas, eventos tagueados | Parquets y SQLite | Media: información táctica del club | Usuarios del club | Ventaja competitiva para un rival |
 | Credenciales de usuarios | SQLite, solo hash scrypt con sal | **Crítica** | Nadie (ni el administrador ve la contraseña) | Acceso al sistema con la identidad de otro |
 | Registro de accesos | SQLite (tabla `registro`) | Media: usuarios y horarios | Administrador | Conocer hábitos de uso; si se altera, se pierde trazabilidad |
@@ -133,7 +133,8 @@ Autenticación local (usuario y contraseña, sin internet). La autorización se 
 | Ver el plantel | Sí | Sí | Sí | Sí |
 | Gestionar el plantel (alta y baja) | Sí | Sí | No | No |
 | Ver el Semáforo (última calificación, quién y cuándo) | Sí | Sí | Sí | Sí |
-| Calificar en el Semáforo | Sí | No | Sí | No |
+| Cargar minutos jugados | Sí | No | Sí | No |
+| Valorar en el Semáforo | Solo la columna de su función (DT, ayudante o coordinador), si tiene una | No | Solo la columna de su función | No |
 | Administrar usuarios y ver el registro de accesos | Sí | No | No | No |
 | Acceso a la base en la nube | Solo el sync, con la clave secreta, desde la máquina que sincroniza | | | |
 
@@ -251,3 +252,6 @@ Ejecutados el 27/10/2026 sobre una copia de la base, salvo que se indique otra c
 | CP-20 | Editar y borrar un evento; agregar y sacar un jugador del plantel | Queda en el registro, con quién, el antes y el después del evento y quién lo había tagueado | OK (edición y borrado en el navegador; plantel con AppTest) |
 | CP-21 | Con la clave pública: leer, insertar, modificar y borrar en las tablas, y subir o listar videos | Todo rechazado; con la clave secreta (sync) todo funciona; correr el SQL dos veces da lo mismo | OK en un Postgres local que imita a Supabase · **[completar]**: `scripts/verificar_rls.py` contra el proyecto real |
 | CP-22 | Cargar la clave pública donde va la secreta, y al revés | El sync no arranca y explica el error | OK |
+| CP-23 | Entrar al Semáforo con DT, ayudante, coordinador, cuerpo técnico sin función, admin, analista y lector | Cada uno edita solo la columna de su función; los minutos solo quien califica; las columnas ajenas se ven como etiquetas y no como controles | OK (AppTest, 7 usuarios) |
+| CP-24 | Cargar minutos y valoraciones, cambiarlas y abrir el otro tiempo del partido | Vale la última; el historial guarda todas las cargas con quién y cuándo; los dos tiempos muestran la misma planilla | OK |
+| CP-25 | Editar el plantel (alta, corrección, baja), importar un CSV, filas inválidas | Cada cambio queda en el registro; sin apellido o con dorsal fuera de 0–99, error y no se guarda; el CSV no duplica jugadores | OK (lógica y navegador) |

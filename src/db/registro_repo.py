@@ -41,6 +41,9 @@ ACCIONES = {
     "evento_borrado": "Evento tagueado borrado",
     "plantel_alta": "Jugador agregado al plantel",
     "plantel_baja": "Jugador sacado del plantel",
+    "plantel_edicion": "Jugador del plantel corregido",
+    "equipo_creado": "Equipo creado",
+    "funcion_cambiada": "Función en el cuerpo técnico cambiada",
 }
 
 

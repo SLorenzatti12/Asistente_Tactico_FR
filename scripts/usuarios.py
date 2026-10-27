@@ -43,19 +43,24 @@ def _pedir_contrasena() -> str:
 
 # Usuarios de prueba, uno por rol: para una instalación de prueba o la
 # defensa, no para la laptop del club (ahí, cada persona con su usuario).
-_DEMO = [("admin_demo", "Admin de prueba", "admin"), ("analista_demo", "Analista de prueba", "analyst"),
-         ("cuerpo_demo", "Cuerpo técnico de prueba", "coach"), ("lector_demo", "Solo lectura de prueba", "viewer")]
+_DEMO = [("admin_demo", "Admin de prueba", "admin", None),
+         ("analista_demo", "Analista de prueba", "analyst", None),
+         ("dt_demo", "DT de prueba", "coach", "dt"),
+         ("ayudante_demo", "Ayudante de prueba", "coach", "ayudante"),
+         ("coordinador_demo", "Coordinador de prueba", "coach", "coordinador"),
+         ("lector_demo", "Solo lectura de prueba", "viewer", None)]
 
 
 def _demo() -> None:
     print("Usuarios de prueba (las contraseñas se muestran una sola vez; no quedan guardadas en claro):\n")
-    for usuario, nombre, rol in _DEMO:
+    for usuario, nombre, rol, funcion in _DEMO:
         if usuarios_repo.obtener_por_usuario(usuario) is not None:
             print(f"  {usuario:<15} ya existe — para otra contraseña: python3 scripts/usuarios.py contrasena {usuario}")
             continue
         clave = secrets.token_urlsafe(9)
-        usuarios_repo.crear_usuario(usuario, nombre, rol, clave)
-        print(f"  {usuario:<15} {usuarios_repo.ROLES[rol]:<16} contraseña: {clave}")
+        usuarios_repo.crear_usuario(usuario, nombre, rol, clave, funcion=funcion)
+        extra = f" ({usuarios_repo.FUNCIONES[funcion]})" if funcion else ""
+        print(f"  {usuario:<17} {usuarios_repo.ROLES[rol] + extra:<36} contraseña: {clave}")
     print("\nPara sacarlos después: desactivarlos desde la vista Usuarios del dashboard.")
 
 
@@ -67,6 +72,8 @@ def main() -> None:
     crear.add_argument("usuario")
     crear.add_argument("--nombre", required=True)
     crear.add_argument("--rol", default="admin", choices=list(usuarios_repo.ROLES))
+    crear.add_argument("--funcion", choices=list(usuarios_repo.FUNCIONES),
+                       help="Función en el cuerpo técnico: su columna de valoración en el semáforo")
     sub.add_parser("listar", help="Lista los usuarios")
     registro = sub.add_parser("registro", help="Últimos accesos y cambios")
     registro.add_argument("-n", type=int, default=40, help="Cuántas filas (default 40)")
@@ -90,13 +97,15 @@ def main() -> None:
             print("No hay usuarios. Creá el primer admin con: python3 scripts/usuarios.py crear <usuario> --nombre \"...\"")
         for u in usuarios:
             estado = "activo" if u["activo"] else "desactivado"
-            print(f"- {u['usuario']:<16} {u['nombre']:<28} {usuarios_repo.ROLES[u['rol']]:<16} {estado:<12} "
+            funcion = usuarios_repo.FUNCIONES.get(u.get("funcion"), "")
+            print(f"- {u['usuario']:<16} {u['nombre']:<28} {usuarios_repo.ROLES[u['rol']]:<16} {funcion:<18} {estado:<12} "
                   f"último ingreso: {u['ultimo_ingreso'] or '—'}")
         return
 
     if args.comando == "crear":
         try:
-            u = usuarios_repo.crear_usuario(args.usuario, args.nombre, args.rol, _pedir_contrasena())
+            u = usuarios_repo.crear_usuario(args.usuario, args.nombre, args.rol, _pedir_contrasena(),
+                                            funcion=args.funcion)
         except ValueError as e:
             sys.exit(f"[ERROR] {e}")
         print(f"✅ Usuario '{u['usuario']}' creado ({usuarios_repo.ROLES[u['rol']]}).")

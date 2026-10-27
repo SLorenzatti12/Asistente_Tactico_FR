@@ -56,6 +56,15 @@ PERMISOS = {
     "viewer":  {"ver_semaforo"},
 }
 
+# Función en el cuerpo técnico (27/10/2026): cada una tiene su columna de
+# valoración en el semáforo, y solo la completa quien tiene esa función.
+# Es independiente del rol (un admin que además es el DT tiene función "dt").
+FUNCIONES = {
+    "dt": "DT",
+    "ayudante": "Ayudante de campo",
+    "coordinador": "Coordinador",
+}
+
 MIN_LARGO_CONTRASENA = 8
 MAX_INTENTOS_FALLIDOS = 5
 VENTANA_BLOQUEO_MIN = 15
@@ -98,6 +107,9 @@ def init_usuarios_table() -> None:
                 ultimo_ingreso  TEXT
             )
         """)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(usuarios)").fetchall()}
+        if "funcion" not in cols:
+            conn.execute("ALTER TABLE usuarios ADD COLUMN funcion TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -140,12 +152,15 @@ def _publico(row: sqlite3.Row | None) -> dict | None:
     return d
 
 
-def crear_usuario(usuario: str, nombre: str, rol: str, contrasena: str, actor: dict | None = None) -> dict:
+def crear_usuario(usuario: str, nombre: str, rol: str, contrasena: str, actor: dict | None = None,
+                  funcion: str | None = None) -> dict:
     usuario = usuario.strip()
     if not usuario or not nombre.strip():
         raise ValueError("Usuario y nombre son obligatorios.")
     if rol not in ROLES:
         raise ValueError(f"Rol desconocido: {rol}")
+    if funcion is not None and funcion not in FUNCIONES:
+        raise ValueError(f"Función desconocida: {funcion}")
     error = validar_contrasena(contrasena)
     if error:
         raise ValueError(error)
@@ -153,15 +168,18 @@ def crear_usuario(usuario: str, nombre: str, rol: str, contrasena: str, actor: d
     try:
         try:
             conn.execute(
-                "INSERT INTO usuarios (usuario, nombre, rol, hash_contrasena, created_at) VALUES (?, ?, ?, ?, ?)",
-                (usuario, nombre.strip(), rol, _hashear(contrasena), datetime.now().isoformat(timespec="seconds")))
+                "INSERT INTO usuarios (usuario, nombre, rol, hash_contrasena, created_at, funcion) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (usuario, nombre.strip(), rol, _hashear(contrasena), datetime.now().isoformat(timespec="seconds"),
+                 funcion))
         except sqlite3.IntegrityError:
             raise ValueError(f"Ya existe el usuario '{usuario}'.") from None
         conn.commit()
         creado = _publico(conn.execute("SELECT * FROM usuarios WHERE usuario = ?", (usuario,)).fetchone())
     finally:
         conn.close()
-    registro_repo.registrar("usuario_creado", actor, objetivo=creado["usuario"], detalle=f"rol: {rol}")
+    registro_repo.registrar("usuario_creado", actor, objetivo=creado["usuario"],
+                            detalle=f"rol: {rol}" + (f" · función: {funcion}" if funcion else ""))
     return creado
 
 
@@ -274,6 +292,23 @@ def cambiar_rol(usuario_id: int, rol: str, actor: dict | None = None) -> None:
         conn.close()
     if actual and actual["rol"] != rol:
         registro_repo.registrar("rol_cambiado", actor, objetivo=nombre, detalle=f"rol: {actual['rol']} → {rol}")
+
+
+def cambiar_funcion(usuario_id: int, funcion: str | None, actor: dict | None = None) -> None:
+    """Función en el cuerpo técnico (FUNCIONES), o None para sacarla."""
+    if funcion is not None and funcion not in FUNCIONES:
+        raise ValueError(f"Función desconocida: {funcion}")
+    conn = _connect()
+    try:
+        antes = conn.execute("SELECT funcion FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+        conn.execute("UPDATE usuarios SET funcion = ? WHERE id = ?", (funcion, usuario_id))
+        conn.commit()
+        nombre = _nombre(conn, usuario_id)
+    finally:
+        conn.close()
+    if antes and antes["funcion"] != funcion:
+        registro_repo.registrar("funcion_cambiada", actor, objetivo=nombre,
+                                detalle=f"función: {antes['funcion'] or 'ninguna'} → {funcion or 'ninguna'}")
 
 
 def cambiar_activo(usuario_id: int, activo: bool, actor: dict | None = None) -> None:

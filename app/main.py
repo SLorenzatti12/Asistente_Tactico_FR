@@ -21,7 +21,8 @@ from pathlib import Path
 from components.map_view import render_map, render_metrics_panel
 
 # Luci desarrolla estas funciones en components/tagging.py
-from components.tagging import init_db, render_tagging_panel, render_semaforo_tab, format_time
+from components.tagging import init_db, render_tagging_panel, format_time
+from components.semaforo_view import render_semaforo
 # Los atajos de teclado taguean con las mismas funciones que los botones de tagging.py
 from components.tagging import TAG_TIME_BUFFER_SEC, get_event_types_for_team, save_event
 
@@ -153,7 +154,7 @@ VISTAS = {
 }
 # Vista → permiso necesario (las que no figuran, las ve cualquier usuario).
 # El semáforo lo ven todos los roles; quien no califica, en solo lectura
-# (tagging.render_semaforo_tab). La vista "Usuarios" del admin se abre desde
+# (components/semaforo_view.py). La vista "Usuarios" del admin se abre desde
 # el menú del usuario, no desde acá.
 PERMISO_VISTA = {"semaforo": "ver_semaforo"}
 
@@ -557,9 +558,8 @@ def main():
         # ── Patrones tácticos detectados ──
         render_tactical_patterns_tab(df)
     else:
-        # ── Semáforo (Luci) ────────────────────────────
-        render_semaforo_tab(match["name"], puede_calificar=puede("calificar_semaforo"),
-                            puede_gestionar_plantel=puede("gestionar_plantel"))
+        # ── Semáforo: planilla del partido y plantel ────
+        render_semaforo(match["name"])
 
 
 if __name__ == "__main__":
