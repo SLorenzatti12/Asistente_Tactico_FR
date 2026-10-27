@@ -4,6 +4,13 @@ Analizador Táctico — Tagueo, Semáforo y persistencia
 PERSONA C — Botones de tagueo one-click, timeline + tarjetas de eventos
 (editar/eliminar con modales), formulario de semáforo post-partido, y
 guardado en SQLite.
+
+Roles (27/10/2026, cambio hecho por Santi con el OK de Luci): el panel de
+eventos y el semáforo tienen modo de solo lectura para los roles que no
+taguean o no califican (ver usuarios_repo.PERMISOS); main.py decide el modo
+según el rol. Cada evento y cada calificación guardan quién los hizo
+(`created_by`), y editar o borrar un evento queda en el registro de accesos
+(src/db/registro_repo.py).
 """
 
 import sqlite3
@@ -24,7 +31,11 @@ from components.map_view import TEAM_COLORS, TEAM_LABELS
 # de data/roster.json por una tabla SQLite (ver src/db/roster_repo.py,
 # src/db/team_repo.py y components/roster_view.py).
 from components.roster_view import render_roster_manager
+from components.sesion import usuario_actual
 from db import roster_repo, team_repo
+# Por src.db (no db): es el mismo módulo que usa sesion.py, así las pruebas
+# que lo apuntan a otra base lo apuntan para los dos.
+from src.db import registro_repo
 
 from theme import STATUS_COLORS
 
@@ -99,6 +110,14 @@ def init_db() -> None:
     if "team" not in existing_cols:
         conn.execute("ALTER TABLE events ADD COLUMN team TEXT")
 
+    # Quién tagueó / quién calificó: el nombre de usuario del login local.
+    # Las filas de antes del login quedan en NULL ("sin dato").
+    if "created_by" not in existing_cols:
+        conn.execute("ALTER TABLE events ADD COLUMN created_by TEXT")
+    semaforo_cols = {row[1] for row in conn.execute("PRAGMA table_info(semaforo)").fetchall()}
+    if "created_by" not in semaforo_cols:
+        conn.execute("ALTER TABLE semaforo ADD COLUMN created_by TEXT")
+
     # Chequeo ANTES del CREATE: si la tabla ya existía (aunque hoy esté
     # vacía porque alguien borró todos los tipos a propósito), no la
     # volvemos a sembrar — solo se siembra la primera vez que se crea.
@@ -148,11 +167,12 @@ def init_db() -> None:
     conn.close()
 
 
-def save_event(match_name: str, tag_type: str, time_sec: float, team: str) -> None:
+def save_event(match_name: str, tag_type: str, time_sec: float, team: str, usuario: str | None = None) -> None:
+    """`usuario`: quién tagueó (nombre de usuario del login local)."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT INTO events (match_name, tag_type, time_sec, team, created_at) VALUES (?, ?, ?, ?, ?)",
-        (match_name, tag_type, time_sec, team, datetime.now().isoformat()),
+        "INSERT INTO events (match_name, tag_type, time_sec, team, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+        (match_name, tag_type, time_sec, team, datetime.now().isoformat(), usuario),
     )
     conn.commit()
     conn.close()
@@ -275,14 +295,30 @@ def delete_event_type(type_id: int) -> None:
     conn.close()
 
 
-def save_semaforo(match_name: str, player_number: int, rating: str) -> None:
+def save_semaforo(match_name: str, player_number: int, rating: str, usuario: str | None = None) -> None:
+    """Cada clic agrega una fila (no pisa la anterior): queda el historial de
+    calificaciones, con quién calificó. La vigente es la última."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT INTO semaforo (match_name, player_number, rating, created_at) VALUES (?, ?, ?, ?)",
-        (match_name, player_number, rating, datetime.now().isoformat()),
+        "INSERT INTO semaforo (match_name, player_number, rating, created_at, created_by) VALUES (?, ?, ?, ?, ?)",
+        (match_name, player_number, rating, datetime.now().isoformat(), usuario),
     )
     conn.commit()
     conn.close()
+
+
+def ultimas_calificaciones(match_name: str) -> dict:
+    """La última calificación de cada dorsal en este partido:
+    {player_number: {"rating", "created_by", "created_at"}}."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    filas = conn.execute(
+        "SELECT player_number, rating, created_by, created_at FROM semaforo "
+        "WHERE match_name = ? ORDER BY id",
+        (match_name,),
+    ).fetchall()
+    conn.close()
+    return {f["player_number"]: dict(f) for f in filas}   # la última pisa a las anteriores
 
 
 def get_events(match_name: str) -> pd.DataFrame:
@@ -296,7 +332,7 @@ def get_events(match_name: str) -> pd.DataFrame:
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query(
         """
-        SELECT e.id, e.team, e.tag_type, e.time_sec, et.emoji
+        SELECT e.id, e.team, e.tag_type, e.time_sec, e.created_by, et.emoji
         FROM events e
         LEFT JOIN event_types et ON et.name = e.tag_type
         WHERE e.match_name = ?
@@ -555,6 +591,11 @@ def _render_events_comparison(events_df: pd.DataFrame) -> None:
 
 
 # ── Editar / eliminar eventos (tarjetas + modales) ──────────────
+def _describir_evento(event: dict) -> str:
+    """Texto para el registro de accesos: "Presión · Local · 00:20"."""
+    return f"{event['tag_type']} · {TEAM_LABELS.get(event['team'], event['team'])} · {format_time(float(event['time_sec']))}"
+
+
 @st.dialog("Editar evento")
 def _edit_event_dialog(event: dict) -> None:
     # El tipo del evento puede haber sido borrado/renombrado desde que se
@@ -574,6 +615,10 @@ def _edit_event_dialog(event: dict) -> None:
     col_save, col_cancel = st.columns(2)
     if col_save.button("Guardar", use_container_width=True, type="primary"):
         update_event(int(event["id"]), tag_type, float(time_sec), team)
+        registro_repo.registrar(
+            "evento_editado", usuario_actual(), objetivo=st.session_state.get("selected_match"),
+            detalle=f"#{event['id']}: {_describir_evento(event)} → "
+                    f"{_describir_evento({'tag_type': tag_type, 'team': team, 'time_sec': time_sec})}")
         st.rerun()
     if col_cancel.button("Cancelar", use_container_width=True):
         st.rerun()
@@ -588,6 +633,9 @@ def _delete_event_dialog(event: dict) -> None:
     col_confirm, col_cancel = st.columns(2)
     if col_confirm.button("Eliminar", use_container_width=True, type="primary"):
         delete_event(int(event["id"]))
+        registro_repo.registrar(
+            "evento_borrado", usuario_actual(), objetivo=st.session_state.get("selected_match"),
+            detalle=f"#{event['id']}: {_describir_evento(event)} (tagueado por {event.get('created_by') or 'sin dato'})")
         st.rerun()
     if col_cancel.button("Cancelar", use_container_width=True):
         st.rerun()
@@ -752,9 +800,10 @@ def _manage_event_types_dialog() -> None:
         _render_type_list_view()
 
 
-def _render_events_cards(events_df: pd.DataFrame) -> None:
+def _render_events_cards(events_df: pd.DataFrame, solo_lectura: bool = False) -> None:
     """Una tarjeta por evento — nada de grilla tipo Excel. Va dentro del
-    desplegable "Historial de eventos" de render_tagging_panel()."""
+    desplegable "Historial de eventos" de render_tagging_panel(). En solo
+    lectura, sin editar ni borrar (el clic para ir al momento sigue)."""
     if events_df.empty:
         st.caption("Todavía no hay eventos tagueados para este partido.")
         return
@@ -764,12 +813,18 @@ def _render_events_cards(events_df: pd.DataFrame) -> None:
         team_key = event["team"] if event["team"] in TEAM_OPTIONS else "home"
 
         with st.container(border=True):
-            col_info, col_edit, col_delete = st.columns([6, 1, 1])
+            if solo_lectura:
+                col_info = st.container()
+            else:
+                col_info, col_edit, col_delete = st.columns([6, 1, 1])
 
             card_label = f"{event['tag_type']} · {TEAM_LABELS[team_key]} · {format_time(event['time_sec'])}"
-            if col_info.button(card_label, key=f"seek_{event['id']}", type="tertiary", use_container_width=True):
+            if col_info.button(card_label, key=f"seek_{event['id']}", type="tertiary", use_container_width=True,
+                               help=f"Tagueado por {event.get('created_by') or 'sin dato (antes del login)'}"):
                 _request_seek(float(event["time_sec"]))
 
+            if solo_lectura:
+                continue
             if col_edit.button("", icon=":material/edit:", key=f"edit_{event['id']}", use_container_width=True):
                 _edit_event_dialog(event)
             if col_delete.button("", icon=":material/delete:", key=f"delete_{event['id']}", use_container_width=True):
@@ -777,10 +832,20 @@ def _render_events_cards(events_df: pd.DataFrame) -> None:
 
 
 # ── Componentes de UI ──────────────────────────────────────────
-def render_tagging_panel() -> None:
-    """Selector de equipo + botones de tagueo one-click + timeline + tarjetas."""
+def render_tagging_panel(solo_lectura: bool = False) -> None:
+    """Selector de equipo + botones de tagueo one-click + timeline + tarjetas.
+
+    `solo_lectura` (roles que no taguean): solo los gráficos y el historial
+    de eventos, sin botonera, sin ⚙️ de tipos y sin editar ni borrar."""
     match_name = st.session_state.get("selected_match", "sin_partido")
     current_time = st.session_state.get("current_time", 0)
+
+    if solo_lectura:
+        with st.container(key="tagging_section"):
+            st.markdown("**Eventos del partido**")
+            st.caption("Solo lectura: tu rol no taguea.")
+            _render_eventos(match_name, current_time, solo_lectura=True)
+        return
 
     # El fondo depende del equipo ya elegido en la corrida anterior (persiste
     # en session_state por el key="tag_team" del control de más abajo), así
@@ -825,25 +890,29 @@ def render_tagging_panel() -> None:
             for i, et in enumerate(event_types):
                 if cols[i % 2].button(et["name"], use_container_width=True, key=f"tag_btn_{et['id']}"):
                     saved_time = max(0.0, current_time - TAG_TIME_BUFFER_SEC)
-                    save_event(match_name, et["name"], saved_time, team)
+                    usuario = usuario_actual()
+                    save_event(match_name, et["name"], saved_time, team, usuario["usuario"] if usuario else None)
                     st.toast(f"Tag guardado: {et['name']} @ {format_time(saved_time)} ({TEAM_LABELS[team]})")
                     st.rerun()
 
         st.divider()
-        events_df = get_events(match_name)
+        _render_eventos(match_name, current_time)
 
-        # Gráficos e historial plegados: en la Mesa táctica la tarjeta va al
-        # lado del video con alto fijo, y a la vista quedan los botones.
-        # Tabs adentro en vez de apilar los dos gráficos.
-        with st.expander("Gráficos de eventos", expanded=False):
-            tab_timeline, tab_comparison = st.tabs(["Momentos del partido", "Comparativa por tipo"])
-            with tab_timeline:
-                _render_events_timeline(events_df, current_time)
-            with tab_comparison:
-                _render_events_comparison(events_df)
 
-        with st.expander(f"Historial de eventos ({len(events_df)})", expanded=False):
-            _render_events_cards(events_df)
+def _render_eventos(match_name: str, current_time: float, solo_lectura: bool = False) -> None:
+    """Gráficos e historial plegados: en la Mesa táctica la tarjeta va al
+    lado del video, y a la vista quedan los botones. Tabs adentro en vez de
+    apilar los dos gráficos."""
+    events_df = get_events(match_name)
+    with st.expander("Gráficos de eventos", expanded=False):
+        tab_timeline, tab_comparison = st.tabs(["Momentos del partido", "Comparativa por tipo"])
+        with tab_timeline:
+            _render_events_timeline(events_df, current_time)
+        with tab_comparison:
+            _render_events_comparison(events_df)
+
+    with st.expander(f"Historial de eventos ({len(events_df)})", expanded=False):
+        _render_events_cards(events_df, solo_lectura=solo_lectura)
 
 
 def _inject_semaforo_css() -> None:
@@ -868,16 +937,25 @@ def _inject_semaforo_css() -> None:
     """, unsafe_allow_html=True)
 
 
-def render_semaforo_tab(match_name: str) -> None:
-    """
-    Formulario de calificación individual post-partido (🔴🟡🟢 por jugador).
+_ICONO_RATING = {"bajo": "🔴", "regular": "🟡", "destacado": "🟢"}
 
-    TODO Persona C:
-      - Mostrar resumen de calificaciones ya guardadas para este partido
+
+def render_semaforo_tab(match_name: str, puede_calificar: bool = True, puede_gestionar_plantel: bool = True) -> None:
+    """
+    Formulario de calificación individual post-partido (🔴🟡🟢 por jugador),
+    con la última calificación de cada uno y quién la puso.
+
+    `puede_calificar` / `puede_gestionar_plantel` salen del rol (main.py):
+    sin el primero, la pestaña es de solo lectura; sin el segundo, el
+    plantel se ve pero no se modifica.
     """
     _inject_semaforo_css()
     st.markdown("**Semáforo post-partido**")
-    st.caption("Calificación individual — hacé clic para evaluar a cada jugador.")
+    if puede_calificar:
+        st.caption("Calificación individual — hacé clic para evaluar a cada jugador. "
+                   "Cada clic queda guardado; vale la última.")
+    else:
+        st.caption("Solo lectura: tu rol no califica. Se ve la última calificación de cada jugador.")
 
     equipo = team_repo.get_match_team(match_name)
     if equipo is None:
@@ -887,13 +965,16 @@ def render_semaforo_tab(match_name: str) -> None:
             "su plantel."
         )
     else:
-        with st.expander(f"⚙️ Gestionar plantel — {equipo['team_name']}"):
-            render_roster_manager(equipo["team_id"])
+        titulo = "⚙️ Gestionar plantel" if puede_gestionar_plantel else "Plantel"
+        with st.expander(f"{titulo} — {equipo['team_name']}"):
+            render_roster_manager(equipo["team_id"], solo_lectura=not puede_gestionar_plantel)
 
     roster = load_roster(match_name)
     if all(p["name"].startswith("Jugador #") for p in roster):
         st.caption("⚠️ Todavía no cargaste el plantel de este equipo — mostrando números sueltos.")
 
+    ultimas = ultimas_calificaciones(match_name)
+    usuario = usuario_actual()
     for idx, player in enumerate(roster):
         # Las keys se indexan por posición, no por dorsal: el dorsal puede
         # repetirse o faltar (varios jugadores sin numerar) y Streamlit
@@ -902,10 +983,17 @@ def render_semaforo_tab(match_name: str) -> None:
         n = player["number"]
         col_num, col_btns = st.columns([1, 3])
         col_num.write(f"**#{n if n is not None else '-'}** {player['name']}")
+        ultima = ultimas.get(n)
+        if ultima:
+            col_num.caption(f"{_ICONO_RATING.get(ultima['rating'], '')} {ultima['rating']} · "
+                            f"por {ultima['created_by'] or 'sin dato'} · {ultima['created_at'][:16].replace('T', ' ')}")
+        elif not puede_calificar:
+            col_num.caption("Sin calificar")
+        if not puede_calificar:
+            continue
         b1, b2, b3 = col_btns.columns(3)
-        if b1.button("🔴", key=f"low_{idx}"):
-            save_semaforo(match_name, n, "bajo")
-        if b2.button("🟡", key=f"mid_{idx}"):
-            save_semaforo(match_name, n, "regular")
-        if b3.button("🟢", key=f"high_{idx}"):
-            save_semaforo(match_name, n, "destacado")
+        for col, clave, rating in ((b1, "low", "bajo"), (b2, "mid", "regular"), (b3, "high", "destacado")):
+            if col.button(_ICONO_RATING[rating], key=f"{clave}_{idx}"):
+                save_semaforo(match_name, n, rating, usuario["usuario"] if usuario else None)
+                st.toast(f"#{n if n is not None else '-'} {player['name']}: {rating}")
+                st.rerun()

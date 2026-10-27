@@ -2,8 +2,10 @@
 Registro de accesos y acciones críticas
 =========================================
 Santi. Quién hizo qué y cuándo: ingresos (y los fallidos), salidas,
-sesiones vencidas por inactividad, altas y cambios de usuarios, y respaldos
-de la base. Vive en la misma SQLite local (tabla `registro`) y no se
+sesiones vencidas por inactividad, altas y cambios de usuarios, respaldos
+de la base, ediciones y borrados de eventos tagueados, y altas y bajas del
+plantel. Quién creó cada evento y quién calificó a cada jugador queda en
+la propia fila (`events.created_by`, `semaforo.created_by`), no acá. Vive en la misma SQLite local (tabla `registro`) y no se
 sincroniza a la nube.
 
 Nunca se guardan contraseñas ni hashes: solo el nombre de usuario escrito,
@@ -35,6 +37,10 @@ ACCIONES = {
     "contrasena_actual_incorrecta": "Contraseña actual incorrecta al cambiarla",
     "respaldo_creado": "Respaldo de la base creado",
     "respaldo_restaurado": "Respaldo restaurado",
+    "evento_editado": "Evento tagueado editado",
+    "evento_borrado": "Evento tagueado borrado",
+    "plantel_alta": "Jugador agregado al plantel",
+    "plantel_baja": "Jugador sacado del plantel",
 }
 
 

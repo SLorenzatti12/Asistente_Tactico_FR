@@ -58,3 +58,16 @@ El dashboard tiene login local y cuatro roles (ver decisiones.md, "Login local y
 
 - **Tarjeta de tagueo:** hoy solo la ven admin y analista. Para que cuerpo técnico y solo lectura vean el gráfico y el historial sin poder modificar, haría falta que `render_tagging_panel()` acepte algo como `solo_lectura=not puede("taguear")`. En ese modo no se muestran los botones de tagueo, el ⚙️ de tipos ni el editar y borrar de cada evento.
 - **Semáforo:** hoy lo ven solo admin y cuerpo técnico (`calificar_semaforo`). Para que analista y solo lectura lo vean sin calificar, `render_semaforo_tab()` necesita desactivar los botones de calificación cuando `not puede("calificar_semaforo")`, y mostrar "Gestionar plantel" solo si `puede("gestionar_plantel")`.
+
+### Hecho por Santi con tu OK (27/10/2026)
+
+Todo lo de arriba quedó hecho en `tagging.py` (ver decisiones.md, "Roles en tagueo, Semáforo y plantel; autor de cada evento y calificación"):
+- `render_tagging_panel(solo_lectura=...)`: en solo lectura, gráficos e historial (con ir al momento), sin botonera, ⚙️, editar ni borrar.
+- `render_semaforo_tab(match_name, puede_calificar=..., puede_gestionar_plantel=...)`: en solo lectura muestra la última calificación de cada jugador.
+  - También para quien califica: era el TODO "mostrar resumen de calificaciones", y ahora muestra la última, con quién y cuándo.
+  - Cada clic ahora avisa y refresca.
+- **Columnas nuevas** `events.created_by` y `semaforo.created_by` (migración aditiva en `init_db()`). `save_event(..., usuario=None)` y `save_semaforo(..., usuario=None)` las reciben. Las filas viejas quedan en NULL.
+- **Registro de accesos:** editar o borrar un evento queda registrado, con antes y después (`_describir_evento`).
+- `registro_repo` se importa como `src.db.registro_repo` (no `db.`), para que sea el mismo módulo que usa `sesion.py`.
+
+Para revisar cuando vuelvas: el semáforo sigue identificando por dorsal (dos sin dorsal comparten la última calificación). Ya estaba así antes.

@@ -152,10 +152,10 @@ VISTAS = {
     "semaforo": ":material/traffic: Semáforo",
 }
 # Vista → permiso necesario (las que no figuran, las ve cualquier usuario).
-# El semáforo, por ahora, solo para quien califica: la pestaña de tagging.py
-# todavía no tiene modo de solo lectura (pendiente para Luci). La vista
-# "Usuarios" del admin se abre desde el menú del usuario, no desde acá.
-PERMISO_VISTA = {"semaforo": "calificar_semaforo"}
+# El semáforo lo ven todos los roles; quien no califica, en solo lectura
+# (tagging.render_semaforo_tab). La vista "Usuarios" del admin se abre desde
+# el menú del usuario, no desde acá.
+PERMISO_VISTA = {"semaforo": "ver_semaforo"}
 
 
 def _vistas_permitidas() -> list[str]:
@@ -224,7 +224,8 @@ def _atajo_de_teclado(tecla: dict) -> None:
             return
         nombre = tipos[n - 1]["name"]
         t = max(0.0, float(tecla["t"]) - TAG_TIME_BUFFER_SEC)
-        save_event(st.session_state["selected_match"], nombre, t, team)
+        usuario = usuario_actual()
+        save_event(st.session_state["selected_match"], nombre, t, team, usuario["usuario"] if usuario else None)
         st.toast(f"Tag guardado: {nombre} @ {format_time(t)} ({TEAM_LABELS[team]})")
         st.rerun()      # la corrida completa actualiza el historial de tags
 
@@ -526,12 +527,10 @@ def main():
         # 70 px de alto. Debajo del video, la barra de tiempo.
         # Fila de abajo: cancha y métricas. En "Solo cancha", la cancha sube
         # al lugar del video.
-        # Quien no taguea (cuerpo técnico, solo lectura) no tiene columna de
-        # tagueo: el video usa todo el ancho.
-        if puede("taguear"):
-            col_principal, col_tagueo = st.columns([2.6, 1], gap="small")
-        else:
-            col_principal, col_tagueo = st.container(), None
+        # Quien no taguea (cuerpo técnico, solo lectura) ve en esa columna los
+        # eventos del partido en solo lectura (gráficos e historial, para ir
+        # a cada momento), sin botonera.
+        col_principal, col_tagueo = st.columns([2.6, 1], gap="small")
         with col_principal:
             hueco_video, hueco_tiempo = st.container(), st.container()
         if mostrar_video and mostrar_cancha:
@@ -545,13 +544,12 @@ def main():
         _panel_sincronizado(df, match, hay_video, mostrar_video, mostrar_cancha,
                             hueco_video, hueco_tiempo, col_cancha, col_metricas)
 
-        if col_tagueo is not None:
-            # ── Tagueo one-click (Luci) ────────────────
-            # Gráficos e historial van plegados (tagging.py): cerrada, la
-            # tarjeta mide como la columna del video y no empuja la fila de
-            # abajo; se agranda solo si se abre un desplegable.
-            with col_tagueo, st.container(border=True, key="panel_tagueo"):
-                render_tagging_panel()
+        # ── Tagueo one-click (Luci) ────────────────
+        # Gráficos e historial van plegados (tagging.py): cerrada, la
+        # tarjeta mide como la columna del video y no empuja la fila de
+        # abajo; se agranda solo si se abre un desplegable.
+        with col_tagueo, st.container(border=True, key="panel_tagueo"):
+            render_tagging_panel(solo_lectura=not puede("taguear"))
     elif vista == "jugadores":
         # ── Estadísticas individuales por jugador ──
         render_player_stats(df)
@@ -560,7 +558,8 @@ def main():
         render_tactical_patterns_tab(df)
     else:
         # ── Semáforo (Luci) ────────────────────────────
-        render_semaforo_tab(match["name"])
+        render_semaforo_tab(match["name"], puede_calificar=puede("calificar_semaforo"),
+                            puede_gestionar_plantel=puede("gestionar_plantel"))
 
 
 if __name__ == "__main__":
