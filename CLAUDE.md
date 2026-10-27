@@ -29,9 +29,14 @@ Contexto persistente del proyecto para Claude Code. Los archivos importados abaj
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
+# Primer administrador (una vez por laptop; la contraseña se pide por teclado)
+python3 scripts/usuarios.py crear <usuario> --nombre "Nombre Apellido" --rol admin
+
 # Levantar el dashboard (entry point real, no app.py)
 streamlit run app/main.py
 ```
+
+El dashboard pide usuario y contraseña (login local, sin internet; ver "Login local y roles" en `decisiones.md`). Para AppTest, iniciar la sesión con `at.session_state["usuario_id"] = <id>` antes del primer `run()` y apuntar `usuarios_repo.DB_PATH` a una copia de la base.
 
 No hay suite de tests, linter ni build configurados en el repo (sin `pytest`, sin `.flake8`/`pyproject.toml`, sin Makefile). Para verificar un cambio de UI sin depender del navegador, se puede usar `streamlit.testing.v1.AppTest` para correr `app/main.py` real y clickear widgets por `key` desde un script — ver cualquier sesión reciente que haya tocado `app/` para el patrón.
 
@@ -88,6 +93,7 @@ python scripts/sync_to_cloud.py <match_name>
 - `tagging.py` — botonera de tagueo one-click, eventos, y el tab de Semáforo post-partido. Dueño de `data/db/analizador.sqlite` (`init_db()`, tablas `events`/`event_types`/`semaforo`).
 - `player_stats_view.py` — estadísticas individuales, sobre `src/analysis/player_stats.py`.
 - `team_selector.py`, `roster_view.py`, `video_registry.py` — capa de base de datos híbrida (ver abajo).
+- `sesion.py`, `usuarios_view.py` — login local, menú del usuario, permisos por rol (`puede(...)`) y administración de usuarios (solo admin), sobre `src/db/usuarios_repo.py`.
 - `theme.py` — única fuente de colores/tipografía; debe mantenerse sincronizado a mano con `.streamlit/config.toml` (Streamlit no permite leer ese `.toml` desde Python, así que la paleta vive duplicada en los dos lugares a propósito — ver comentarios en ambos archivos si hay que tocar un color).
 
 ## Pipeline de datos (`src/`)
@@ -112,6 +118,7 @@ Piezas locales (`src/db/`), cada una dueña de su propia tabla en el mismo archi
 - `team_repo.py` — equipos/categorías (soporta más de un plantel, ej. Primera/Reserva) y qué equipo jugó cada partido (`match_team`).
 - `estadio_repo.py` — estadios con las medidas de su cancha (`estadios`) y en cuál se jugó cada partido (`match_estadio`). Alta/listado/asignación con `scripts/estadios.py`; lo consume `calibrate.py --estadio`.
 - `partido_repo.py` — agrupa los dos videos (uno por tiempo) de un partido (`partido_tiempos`). Alta con `scripts/partidos.py`, que copia equipo y estadio a los dos tiempos. Solo local por ahora.
+- `usuarios_repo.py` — usuarios del dashboard (contraseña con hash scrypt, nunca en claro), los cuatro roles y la matriz de permisos. Solo local: no se sincroniza.
 - `roster_repo.py` — plantel de jugadores **por equipo**, cargado una sola vez y reutilizado en todos sus partidos (no por partido). Baja = `DELETE` físico, a propósito (no hay soft delete).
 - `video_repo.py` — ruta local del video crudo de cada partido, y si ya se subió.
 - `local.py` — helpers de solo-lectura sobre `events`/`semaforo` (tablas de `tagging.py`) para el sync.

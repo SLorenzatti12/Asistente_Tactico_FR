@@ -94,3 +94,10 @@ Santi pasó su parte (`main.py`, `config.toml`, `tactical_patterns_view.py`, `vi
   - tarjetas de totales;
   - `st.dataframe` con `column_config` (barras);
   - ficha lateral al seleccionar una fila.
+
+## Roles y permisos (26/10/2026)
+
+El dashboard tiene login local y cuatro roles (ver decisiones.md, "Login local y roles"). `main.py` ya muestra `render_team_selector` y `render_video_registry` solo a quien puede gestionar el partido (admin y analista). Lo que queda en tus archivos:
+
+- **`roster_view.py`:** el alta y la baja del plantel deberían quedar solo para `puede("gestionar_plantel")` (`from components.sesion import puede`). Hoy se abre desde el Semáforo, que ve el cuerpo técnico.
+- **Sync (`src/db/sync.py`):** la tabla local `usuarios` (con los hashes de las contraseñas) **no** se tiene que subir a Supabase. Si algún día se agrega login en la nube, va con Supabase Auth y la tabla `users` de `db/schema_cloud.sql`.

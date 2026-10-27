@@ -39,6 +39,10 @@ from components.video_registry import render_video_registry
 # Patrones tácticos detectados (src/analysis/tactical_patterns.py)
 from components.tactical_patterns_view import render_tactical_patterns_tab
 
+# Login local, roles y administración de usuarios (src/db/usuarios_repo.py)
+from components.sesion import nombre_rol, puede, render_login, render_menu_usuario, usuario_actual
+from components.usuarios_view import render_usuarios
+
 # Partidos de dos tiempos: un video por tiempo (src/db/partido_repo.py)
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -146,6 +150,15 @@ VISTAS = {
     "patrones": ":material/warning: Patrones",
     "semaforo": ":material/traffic: Semáforo",
 }
+# Vista → permiso necesario (las que no figuran, las ve cualquier usuario).
+# El semáforo, por ahora, solo para quien califica: la pestaña de tagging.py
+# todavía no tiene modo de solo lectura (pendiente para Luci). La vista
+# "Usuarios" del admin se abre desde el menú del usuario, no desde acá.
+PERMISO_VISTA = {"semaforo": "calificar_semaforo"}
+
+
+def _vistas_permitidas() -> list[str]:
+    return [v for v in VISTAS if v not in PERMISO_VISTA or puede(PERMISO_VISTA[v])]
 
 
 def _html_partido(match: dict, medidas: dict) -> str:
@@ -170,18 +183,18 @@ def _pedir_salto(t: float) -> None:
 
 
 # ── Atajos de teclado (los escucha el componente de video) ───────
-def _html_atajos(team: str) -> str:
-    """Leyenda de atajos, con el número de cada botón de tagueo del equipo activo."""
-    tipos = get_event_types_for_team(team)[:9]
-    tags = " ".join(f"<span><kbd>{i}</kbd>{t['name']}</span>" for i, t in enumerate(tipos, start=1))
-    return (
-        '<div class="at-atajos">'
-        "<span><kbd>Espacio</kbd>reproducir / pausar</span>"
-        "<span><kbd>←</kbd><kbd>→</kbd>±1 s (con <kbd>Shift</kbd> ±5 s)</span>"
-        "<span><kbd>L</kbd><kbd>V</kbd>taguear para Local / Visitante</span>"
-        f"<span>Tags {TEAM_LABELS.get(team, team)}:</span>{tags}"
-        "</div>"
-    )
+def _html_atajos(team: str, con_tags: bool = True) -> str:
+    """Leyenda de atajos, con el número de cada botón de tagueo del equipo
+    activo (sin la parte de tagueo para los roles que no taguean)."""
+    html = ('<div class="at-atajos">'
+            "<span><kbd>Espacio</kbd>reproducir / pausar</span>"
+            "<span><kbd>←</kbd><kbd>→</kbd>±1 s (con <kbd>Shift</kbd> ±5 s)</span>")
+    if con_tags:
+        tipos = get_event_types_for_team(team)[:9]
+        tags = " ".join(f"<span><kbd>{i}</kbd>{t['name']}</span>" for i, t in enumerate(tipos, start=1))
+        html += ("<span><kbd>L</kbd><kbd>V</kbd>taguear para Local / Visitante</span>"
+                 f"<span>Tags {TEAM_LABELS.get(team, team)}:</span>{tags}")
+    return html + "</div>"
 
 
 def _atajo_de_teclado(tecla: dict) -> None:
@@ -190,7 +203,11 @@ def _atajo_de_teclado(tecla: dict) -> None:
     botonera de tagging.py (Luci): el número N es el botón N del equipo
     activo, en el orden en que se ven, con el mismo colchón de
     TAG_TIME_BUFFER_SEC. El tiempo es el del video al apretar la tecla.
+    Solo para los roles que taguean (usuarios_repo.PERMISOS).
     """
+    if not puede("taguear"):
+        st.toast("Tu rol no puede taguear.")
+        return
     if tecla.get("accion") == "equipo":
         # El selector de equipo de tagging.py no se instanció en esta corrida
         # del fragmento, así que se puede cambiar su valor acá.
@@ -397,7 +414,7 @@ def _panel_sincronizado(df: pd.DataFrame, match: dict, hay_video: bool, mostrar_
                 unsafe_allow_html=True,
             )
         if lugar:
-            st.html(_html_atajos(st.session_state.get("tag_team") or "home"))
+            st.html(_html_atajos(st.session_state.get("tag_team") or "home", con_tags=puede("taguear")))
 
     if mostrar_cancha:
         with col_cancha:
@@ -416,6 +433,16 @@ def main():
     init_db()
     st.html(_ESTILOS_MOCKUP)
 
+    # Login local: sin usuario no se muestra nada del partido.
+    usuario = usuario_actual()
+    if usuario is None:
+        render_login(_HTML_MARCA)
+        return
+    # Si el rol cambió y la vista elegida ya no le corresponde, vuelve a la Mesa táctica.
+    vistas = _vistas_permitidas()
+    if st.session_state.get("vista") not in vistas:
+        st.session_state["vista"] = "analisis"
+
     # Si se clickeó un evento en el timeline de tagging.py, o la evidencia de
     # un patrón, el salto de tiempo queda pendiente en esta clave intermedia —
     # Streamlit no deja reasignar session_state["current_time"] una vez que el
@@ -430,23 +457,33 @@ def main():
 
     # ── Encabezado: marca, partido, navegación y cambio de partido ──
     with st.container(key="app_header"):
-        col_marca, col_partido, col_nav, col_cambiar = st.columns(
-            [2.7, 2.4, 4.7, 1.2], vertical_alignment="center")
+        col_marca, col_partido, col_nav, col_cambiar, col_usuario = st.columns(
+            [2.4, 2.6, 4.6, 1.1, 1.1], vertical_alignment="center")
         # El popover va primero en el código (no en pantalla): el partido que
         # se elige ahí es el que muestra la píldora del medio.
         with col_cambiar:
             with st.popover("Partido", icon=":material/swap_horiz:", width="stretch"):
                 match = match_selector()
-                if match is not None:
+                if match is not None and puede("gestionar_partido"):
                     render_team_selector(match["name"])
                     render_video_registry(match["name"], default_path=match["video_path"])
         with col_marca:
             st.html(_HTML_MARCA)
         with col_nav:
             vista = st.segmented_control(
-                "Vista", list(VISTAS), format_func=VISTAS.get, required=True,
+                "Vista", vistas, format_func=VISTAS.get, required=True,
                 key="vista", label_visibility="collapsed",
+                on_change=lambda: st.session_state.pop("_ver_usuarios", None),
             )
+        with col_usuario:
+            render_menu_usuario(usuario)
+
+    # Administración de usuarios (solo admin), abierta desde el menú del usuario.
+    if st.session_state.get("_ver_usuarios") and puede("administrar_usuarios"):
+        st.button("Volver", icon=":material/arrow_back:", key="volver_de_usuarios",
+                  on_click=lambda: st.session_state.pop("_ver_usuarios", None))
+        render_usuarios(usuario)
+        return
 
     if match is None:
         st.warning(
@@ -486,7 +523,12 @@ def main():
         # 70 px de alto. Debajo del video, la barra de tiempo.
         # Fila de abajo: cancha y métricas. En "Solo cancha", la cancha sube
         # al lugar del video.
-        col_principal, col_tagueo = st.columns([2.6, 1], gap="small")
+        # Quien no taguea (cuerpo técnico, solo lectura) no tiene columna de
+        # tagueo: el video usa todo el ancho.
+        if puede("taguear"):
+            col_principal, col_tagueo = st.columns([2.6, 1], gap="small")
+        else:
+            col_principal, col_tagueo = st.container(), None
         with col_principal:
             hueco_video, hueco_tiempo = st.container(), st.container()
         if mostrar_video and mostrar_cancha:
@@ -500,12 +542,12 @@ def main():
         _panel_sincronizado(df, match, hay_video, mostrar_video, mostrar_cancha,
                             hueco_video, hueco_tiempo, col_cancha, col_metricas)
 
-        with col_tagueo:
+        if col_tagueo is not None:
             # ── Tagueo one-click (Luci) ────────────────
             # Gráficos e historial van plegados (tagging.py): cerrada, la
             # tarjeta mide como la columna del video y no empuja la fila de
             # abajo; se agranda solo si se abre un desplegable.
-            with st.container(border=True, key="panel_tagueo"):
+            with col_tagueo, st.container(border=True, key="panel_tagueo"):
                 render_tagging_panel()
     elif vista == "jugadores":
         # ── Estadísticas individuales por jugador ──

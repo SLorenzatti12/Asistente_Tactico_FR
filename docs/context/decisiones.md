@@ -552,6 +552,54 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 - **Luci:** botonera de tagueo y semáforo.
 - **Santi, después de la demo:** barra de transporte propia y marcas de eventos en la línea de tiempo, dentro del componente de video.
 
+## Login local y roles (26/10/2026)
+
+**Decisión (Santi):**
+- **El login es local:** los usuarios viven en la SQLite de la laptop y funciona sin internet, como todo lo de la cancha. El login de la nube (Supabase Auth y RLS) queda para cuando haya una vista para ver desde casa.
+- **Roles:** los cuatro de `db/schema_cloud.sql`.
+- **Alta:** el primer admin se crea por consola (`scripts/usuarios.py`) y el resto, desde la app.
+
+**Por qué no `st.login`:** el login de Streamlit usa un proveedor externo (Google, etc.) por internet. En la cancha no anda.
+
+**Cómo está hecho:**
+- **`src/db/usuarios_repo.py`:** tabla `usuarios`.
+  - Las contraseñas se guardan como hash scrypt con sal por usuario (`hashlib`, sin dependencias nuevas), nunca en claro; mínimo 8 caracteres.
+  - Siempre queda al menos un admin activo, y los usuarios se desactivan, no se borran.
+  - La matriz de permisos es `PERMISOS`.
+- **`app/components/sesion.py`:**
+  - pantalla de ingreso y menú del usuario (cambiar contraseña, "Usuarios" para el admin, salir);
+  - el usuario se relee de la base en cada corrida, así que desactivarlo o cambiarle el rol aplica en la próxima interacción;
+  - la sesión es por pestaña del navegador: al recargar la página hay que volver a ingresar.
+- **`app/components/usuarios_view.py`:** alta, cambio de rol, contraseña nueva y activar o desactivar. Un admin no puede desactivarse ni cambiarse el rol a sí mismo.
+
+| Rol | Puede |
+|---|---|
+| Administrador | todo, incluida la administración de usuarios |
+| Analista | taguear (botones y atajos), gestionar el partido (equipo, video) y el plantel, tipos de evento |
+| Cuerpo técnico | ver todo y calificar el semáforo |
+| Solo lectura | ver; no carga ni modifica nada |
+
+**Qué se controla hoy (en `main.py`):**
+- vistas según el rol;
+- columna de tagueo y atajos de tagueo solo para quien taguea; para el resto, el video usa todo el ancho;
+- equipo y video del partido solo para quien gestiona el partido.
+
+**Límites:**
+- **Es control de la pantalla, no de los datos:** quien tenga acceso a los archivos de la laptop puede leer la base y los parquets.
+- **Los usuarios y sus hashes no se sincronizan a Supabase.**
+- **Faltan modos de solo lectura en archivos de Luci y Nico** (anotado en sus notas de pendientes). Mientras tanto:
+  - el Semáforo lo ven solo admin y cuerpo técnico;
+  - el cuerpo técnico, desde el Semáforo, todavía puede abrir "Gestionar plantel";
+  - quien no taguea no ve el gráfico ni el historial de eventos.
+
+**Verificado (AppTest sobre una copia de la base, con un usuario de cada rol):**
+- clave incorrecta rechazada;
+- vistas, botones de tagueo y configuración del partido según la tabla;
+- alta de usuario y "Salir";
+- un usuario desactivado con la sesión abierta queda afuera en la próxima interacción.
+
+También se probó en el navegador (pantalla de ingreso, menú del usuario y vista Usuarios) con un usuario temporal, que después se borró.
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.

@@ -129,6 +129,9 @@ scripts/estadios.py          # alta/listado de estadios y asignación a partidos
   referencien ese id en vez de un número de camiseta suelto).
 - Definir si Supabase Auth reemplaza la tabla `users` propia, si en algún
   momento se necesita login real en una vista compartida del equipo.
+  El dashboard local ya tiene login propio y offline (26/10/2026, tabla
+  `usuarios` en SQLite, mismos cuatro roles). Esos usuarios y sus hashes
+  **no** se sincronizan: si se agrega login en la nube, va con Supabase Auth.
 - Activar Row Level Security con políticas reales — hoy está desactivada
   a propósito porque no hay auth ni políticas escritas todavía (ver
   `decisiones.md`). Mientras tanto, cualquiera con la key pública del

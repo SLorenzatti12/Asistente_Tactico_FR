@@ -51,3 +51,10 @@ por:
 ```
 
 Si `_render_events_cards` ya pone su propio título ("Editar eventos"), se puede sacar, porque el desplegable ya lo nombra.
+
+## Roles y permisos (26/10/2026)
+
+El dashboard tiene login local y cuatro roles (ver decisiones.md, "Login local y roles"). Desde `main.py` ya se controla qué vistas ve cada rol y quién ve la tarjeta de tagueo. Para que el control quede completo hace falta un modo de solo lectura en `tagging.py`. Con `from components.sesion import puede`:
+
+- **Tarjeta de tagueo:** hoy solo la ven admin y analista. Para que cuerpo técnico y solo lectura vean el gráfico y el historial sin poder modificar, haría falta que `render_tagging_panel()` acepte algo como `solo_lectura=not puede("taguear")`. En ese modo no se muestran los botones de tagueo, el ⚙️ de tipos ni el editar y borrar de cada evento.
+- **Semáforo:** hoy lo ven solo admin y cuerpo técnico (`calificar_semaforo`). Para que analista y solo lectura lo vean sin calificar, `render_semaforo_tab()` necesita desactivar los botones de calificación cuando `not puede("calificar_semaforo")`, y mostrar "Gestionar plantel" solo si `puede("gestionar_plantel")`.
