@@ -281,6 +281,35 @@ UMBRAL_NO_ACHICA_M = 3.0
 # Déficit promedio (metros) que se mapea a severidad máxima.
 UMBRAL_SEVERIDAD_MAX_NO_ACHICA_M = 8.0
 
+# ── Criterios ajustables (27/10/2026) ─────────────────────────
+# Los seis umbrales que deciden QUÉ cuenta como patrón (no CÓMO se mide).
+# Son los únicos que tiene sentido que ajuste el club: el resto de las
+# constantes de este módulo son filtros técnicos (ruido, fragmentos de
+# track). Los valores por defecto son exactamente las constantes de arriba,
+# con su calibración documentada; detectar_fases/detectar_patrones aceptan
+# otros valores para la vista previa "Probar otros criterios" de la vista
+# Patrones, que recalcula sin guardar nada. Cambiar los valores por defecto
+# sigue requiriendo mostrar antes el efecto (decisiones.md).
+CRITERIOS_POR_DEFECTO = {
+    "umbral_avance_ms": UMBRAL_AVANCE_MS,
+    "umbral_desconexion": UMBRAL_DESCONEXION_MIN,
+    "proporcion_desconexion": PROPORCION_MIN_DESCONEXION,
+    "umbral_no_achica_m": UMBRAL_NO_ACHICA_M,
+    "min_fases_ataque": MIN_FASES_ATAQUE,
+    "proporcion_no_achica": PROPORCION_MIN_NO_ACHICA,
+}
+
+
+def criterios_completos(criterios: dict | None = None) -> dict:
+    """Los criterios por defecto, con los que se pasen encima. Rechaza claves
+    desconocidas (un typo no puede quedar ignorado en silencio)."""
+    criterios = dict(criterios or {})
+    desconocidas = set(criterios) - set(CRITERIOS_POR_DEFECTO)
+    if desconocidas:
+        raise ValueError(f"Criterios desconocidos: {sorted(desconocidas)}")
+    return {**CRITERIOS_POR_DEFECTO, **criterios}
+
+
 # ── Candidatos a "mismo jugador, track distinto" ──────────────
 # ByteTrack pierde la identidad de un jugador (oclusión, cruce, salir de
 # cuadro) y le asigna un track_id nuevo al reaparecer — a veces incluso
@@ -466,7 +495,8 @@ def _formatear_evidencia(segmentos: list, maximo: int = 3) -> str:
 
 
 # ── Paso 1: fases de juego ────────────────────────────────────
-def detectar_fases(df: pd.DataFrame, ventana_seg: float = VENTANA_FASE_SEG_DEFAULT) -> pd.DataFrame:
+def detectar_fases(df: pd.DataFrame, ventana_seg: float = VENTANA_FASE_SEG_DEFAULT,
+                   umbral_avance_ms: float = UMBRAL_AVANCE_MS) -> pd.DataFrame:
     """
     Clasifica, frame a frame y por equipo, si el bloque avanza ("ataque"),
     retrocede ("defensa"), tiene un cambio brusco de sentido ("transicion")
@@ -499,6 +529,7 @@ def detectar_fases(df: pd.DataFrame, ventana_seg: float = VENTANA_FASE_SEG_DEFAU
 
     columnas_salida = ["frame", "time_sec", "team", "centroide_x", "fase"]
     vacio = pd.DataFrame(columns=columnas_salida)
+    vacio.attrs["umbral_avance_ms"] = umbral_avance_ms
     if df.empty:
         return vacio
 
@@ -542,8 +573,8 @@ def detectar_fases(df: pd.DataFrame, ventana_seg: float = VENTANA_FASE_SEG_DEFAU
         tiene_dato = velocidad.notna()
         fase = pd.Series("sin_datos", index=suave.index, dtype=object)
         fase[tiene_dato] = "estable"
-        fase[tiene_dato & (velocidad >= UMBRAL_AVANCE_MS)] = "ataque"
-        fase[tiene_dato & (velocidad <= -UMBRAL_AVANCE_MS)] = "defensa"
+        fase[tiene_dato & (velocidad >= umbral_avance_ms)] = "ataque"
+        fase[tiene_dato & (velocidad <= -umbral_avance_ms)] = "defensa"
 
         es_transicion = (
             velocidad.notna() & velocidad_previa.notna()
@@ -570,6 +601,7 @@ def detectar_fases(df: pd.DataFrame, ventana_seg: float = VENTANA_FASE_SEG_DEFAU
         .reset_index(drop=True)
     )
     resultado.attrs["avisos"] = avisos
+    resultado.attrs["umbral_avance_ms"] = umbral_avance_ms
     return resultado
 
 
@@ -675,8 +707,10 @@ def _desviacion_linea_por_frame(jugadores: pd.DataFrame, direccion: dict) -> pd.
     return resultado
 
 
-def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
+def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame, criterios: dict) -> tuple:
     """Implementa el patrón 'desconectado' — ver detectar_patrones()."""
+    umbral = criterios["umbral_desconexion"]
+    proporcion_min = criterios["proporcion_desconexion"]
     filas = []
     no_evaluados = []
 
@@ -740,11 +774,11 @@ def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
             if mediana_referencia <= 0:
                 continue
             exceso_relativo = (valor - mediana_referencia) / mediana_referencia
-            if exceso_relativo <= UMBRAL_DESCONEXION_MIN:
+            if exceso_relativo <= umbral:
                 continue
 
             sub_track = jugadores[jugadores["track_id"] == track_id].sort_values("frame")
-            umbral_instantaneo = mediana_referencia * (1 + UMBRAL_DESCONEXION_MIN)
+            umbral_instantaneo = mediana_referencia * (1 + umbral)
             segmentos = _segmentos_contiguos(
                 sub_track["frame"].to_numpy(),
                 sub_track["time_sec"].to_numpy(),
@@ -760,7 +794,7 @@ def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
             duracion_desviado = sum(fin - ini for ini, fin in segmentos)
             duracion_en_cancha = sub_track["time_sec"].iloc[-1] - sub_track["time_sec"].iloc[0]
             proporcion_desviado = duracion_desviado / duracion_en_cancha if duracion_en_cancha > 0 else 0.0
-            if proporcion_desviado <= PROPORCION_MIN_DESCONEXION:
+            if proporcion_desviado <= proporcion_min:
                 continue
 
             severidad = float(np.clip(exceso_relativo / UMBRAL_SEVERIDAD_MAX_DESCONEXION, 0.0, 1.0))
@@ -785,8 +819,11 @@ def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
     return pd.DataFrame(filas), no_evaluados
 
 
-def _detectar_no_achica(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
+def _detectar_no_achica(lineas: pd.DataFrame, fases: pd.DataFrame, criterios: dict) -> tuple:
     """Implementa el patrón 'no_achica' — ver detectar_patrones()."""
+    min_fases = int(criterios["min_fases_ataque"])
+    umbral_m = criterios["umbral_no_achica_m"]
+    proporcion_min = criterios["proporcion_no_achica"]
     filas = []
     no_evaluados = []
 
@@ -811,11 +848,11 @@ def _detectar_no_achica(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
             SEGMENTO_ATAQUE_MIN_SEG,
         )
 
-        if len(segmentos_ataque) < MIN_FASES_ATAQUE:
+        if len(segmentos_ataque) < min_fases:
             no_evaluados.append(
                 f"no_achica: {team} tuvo {len(segmentos_ataque)} fase(s) de ataque de "
                 f"{SEGMENTO_ATAQUE_MIN_SEG:.0f}s+ en el clip — se necesitan al menos "
-                f"{MIN_FASES_ATAQUE} para no evaluar sobre una sola observación."
+                f"{min_fases} para no evaluar sobre una sola observación."
             )
             continue
 
@@ -852,7 +889,7 @@ def _detectar_no_achica(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
                 fases_evaluadas_por_track[track_id] = fases_evaluadas_por_track.get(track_id, 0) + 1
                 dx_linea_prom = float(np.mean(pares_linea))
                 deficit = dx_linea_prom - dx_jugador
-                if deficit > UMBRAL_NO_ACHICA_M:
+                if deficit > umbral_m:
                     deficit_por_track.setdefault(track_id, []).append((t_ini, t_fin, deficit))
 
         for track_id, ocurrencias in deficit_por_track.items():
@@ -863,12 +900,12 @@ def _detectar_no_achica(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
             # Oportunidades mínimas PARA ESTE JUGADOR (no solo para el equipo):
             # un track puede haber estado en cancha en menos subidas que el
             # total del equipo (entró/salió del cuadro, fragmentación).
-            if total_fases < MIN_FASES_ATAQUE:
+            if total_fases < min_fases:
                 continue
             # Proporción de repetición: "1 de 4" o "2 de 4" no alcanzan — ver
             # PROPORCION_MIN_NO_ACHICA. Sin esto, una sola subida coincidente
             # (basculación normal, no una falla del jugador) ya reportaba.
-            if len(ocurrencias) <= total_fases * PROPORCION_MIN_NO_ACHICA:
+            if len(ocurrencias) <= total_fases * proporcion_min:
                 continue
 
             segmentos = [(a, b) for a, b, _ in ocurrencias]
@@ -1054,7 +1091,8 @@ def agrupar_candidatos_fusion(candidatos: pd.DataFrame, tracks) -> dict[int, lis
     return grupos
 
 
-def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFrame) -> pd.DataFrame:
+def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFrame,
+                      criterios: dict | None = None) -> pd.DataFrame:
     """
     Corre los patrones implementados (desconectado, no_achica) y devuelve
     una fila por (track_id, patrón detectado) — solo para las combinaciones
@@ -1101,16 +1139,21 @@ def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFram
         "track_id", "team", "patron", "severidad", "valor_tecnico",
         "n_ocurrencias", "evidencia_seg", "descripcion", "posible_mismo_jugador_que",
     ]
+    # `criterios`: ver CRITERIOS_POR_DEFECTO. El umbral de avance se aplica en
+    # detectar_fases(), que lo deja anotado en sus attrs; acá se registra el
+    # que realmente se usó, para que el resultado diga con qué criterio salió.
+    criterios = criterios_completos(criterios)
+    criterios["umbral_avance_ms"] = fases.attrs.get("umbral_avance_ms", criterios["umbral_avance_ms"])
 
     partes = []
     no_evaluados = []
 
-    parte, msgs = _detectar_desconectado(lineas, fases)
+    parte, msgs = _detectar_desconectado(lineas, fases, criterios)
     if not parte.empty:
         partes.append(parte)
     no_evaluados.extend(msgs)
 
-    parte, msgs = _detectar_no_achica(lineas, fases)
+    parte, msgs = _detectar_no_achica(lineas, fases, criterios)
     if not parte.empty:
         partes.append(parte)
     no_evaluados.extend(msgs)
@@ -1142,6 +1185,7 @@ def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFram
     resultado.attrs["avisos"] = list(avisos_vistos)
     resultado.attrs["patrones_no_evaluados"] = no_evaluados
     resultado.attrs["candidatos_fusion"] = candidatos
+    resultado.attrs["criterios"] = criterios
     return resultado
 
 

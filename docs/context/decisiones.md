@@ -689,6 +689,50 @@ También se probó en el navegador (pantalla de ingreso, menú del usuario y vis
 
 **Límite que queda:** ~~el Semáforo sigue identificando al jugador por dorsal~~ — resuelto el mismo día con el rediseño del Semáforo (sección siguiente).
 
+## Criterios propios del club para los patrones: revisión del cuerpo técnico y prueba de criterios (27/10/2026)
+
+**Pedido (Santi):** los patrones son lo que más le interesa al club, y tiene que poder establecer sus propios criterios.
+
+**Enfoque acordado:**
+- Separar **lo que el sistema mide** (posiciones, líneas, fases: ingeniería, no lo decide el club) de **lo que el club considera un problema** (umbrales, a quién aplica, excepciones).
+- Antes de dejar que el club cambie un criterio, juntar evidencia de él mismo. Sin eso, un criterio "propio" es un número inventado con otro nombre.
+- **Orden:**
+  1. **Calificación de cada momento por el cuerpo técnico** (hecho).
+  2. **Vista previa de criterios** (hecho).
+  3. **Criterios guardados por equipo**, en unidades de cancha, con versión (pendiente).
+  4. **Excepciones por línea o zona** (pendiente). Por jugador no se puede: el tracking no sabe quién es cada uno.
+  5. **Patrones nuevos a partir de una ficha** que completa el club (`docs/ficha_criterio_patron.md`).
+
+**Qué se hizo:**
+- **Umbrales como parámetros** (`tactical_patterns.py`): los seis umbrales que deciden qué cuenta como patrón pasan a `CRITERIOS_POR_DEFECTO`. Son los de desconectado, no achica y la velocidad de avance del bloque.
+  - `detectar_fases(umbral_avance_ms=…)` y `detectar_patrones(criterios=…)` aceptan otros valores, y el resultado deja anotados en `.attrs["criterios"]` los que usó.
+  - **Los valores por defecto no cambiaron.** Verificado contra la versión anterior: mismos patrones, fases y "no evaluados", fila por fila, en `sportivo_crop3` (1 momento) y `partido_clip2` (0).
+- **Revisión de cada momento** (`src/db/revision_patrones_repo.py`, tabla `patrones_revision`):
+  - "👍 Útil", "✅ Correcto tácticamente" o "🚫 No se ve en el video", y un comentario.
+  - Solo agrega filas: vale la última y queda el historial.
+  - Cada revisión guarda el valor medido, la severidad, el segundo del primer tramo y los criterios con que apareció el momento. Así sigue siendo interpretable si cambia un criterio o se reprocesa el video, que renumera los tracks.
+  - **Permiso nuevo `revisar_patrones`:** admin, analista y cuerpo técnico. El lector ve la calificación sin poder cambiarla.
+  - Arriba de las tarjetas, "Revisados N de M" por veredicto.
+  - "Lo que dijo el cuerpo técnico", el acumulado de todos los partidos por patrón con el % útil y los comentarios, es la evidencia para el informe y para justificar un cambio de criterio.
+- **"Probar otros criterios (no cambia nada)":** las seis perillas en unidades de cancha, con el valor vigente y una ayuda.
+  - Recalcula el partido abierto (~20 s en `sportivo_crop3`, cacheado) y compara con lo actual: cuántos momentos aparecerían, cuántos son nuevos, cuáles dejarían de aparecer y qué había dicho el cuerpo técnico de cada uno.
+  - Los nuevos se pueden calificar ahí mismo, guardando el criterio de prueba con que aparecieron.
+  - No guarda criterios ni cambia lo que ven los demás.
+
+**Verificado:**
+- **AppTest sobre una copia aislada:**
+  - el DT califica "correcto tácticamente" con comentario, y queda guardado con su usuario y el criterio vigente;
+  - el resumen pasa a 1 de 1, y el lector lo ve sin control;
+  - **con criterios más permisivos** (30% más despegado que su línea, 50% del tiempo, 2 m de déficit), `sportivo_crop3` pasaría de **1 a 16 momentos**: 15 nuevos, 0 desaparecen. Uno nuevo calificado queda con `umbral_desconexion = 0.3`;
+  - lo que ven los demás sigue en 1 momento.
+- **En el navegador:** la tarjeta con la calificación y el comentario, y el panel de perillas.
+- Los AppTest de siempre, sin excepciones.
+
+**Uso esperado:**
+1. El club revisa y califica los momentos de varios partidos.
+2. Con "Probar otros criterios" se mira qué umbral separa lo "útil" de lo "correcto tácticamente".
+3. Recién con esa evidencia se propone cambiar un criterio, mostrando antes el efecto (la regla de siempre).
+
 ## Semáforo por partido: plantel del club, minutos y valoración de DT, ayudante y coordinador (27/10/2026)
 
 **Pedido (Santi):** el semáforo no identifica a nadie. El club carga su plantilla y el cuerpo técnico registra minutos y rendimiento. Cada jugador tiene apellido, nombre, minutos jugados y la valoración de tres personas: DT, ayudante de campo y coordinador. Y una vista para crear el plantel.

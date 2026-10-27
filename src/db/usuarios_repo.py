@@ -50,9 +50,9 @@ ROLES = {
 # Patrones) lo puede cualquier usuario activo.
 PERMISOS = {
     "admin":   {"taguear", "gestionar_partido", "gestionar_plantel", "calificar_semaforo",
-                "ver_semaforo", "administrar_usuarios"},
-    "analyst": {"taguear", "gestionar_partido", "gestionar_plantel", "ver_semaforo"},
-    "coach":   {"calificar_semaforo", "ver_semaforo"},
+                "ver_semaforo", "administrar_usuarios", "revisar_patrones"},
+    "analyst": {"taguear", "gestionar_partido", "gestionar_plantel", "ver_semaforo", "revisar_patrones"},
+    "coach":   {"calificar_semaforo", "ver_semaforo", "revisar_patrones"},
     "viewer":  {"ver_semaforo"},
 }
 
