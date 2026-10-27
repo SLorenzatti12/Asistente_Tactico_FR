@@ -600,6 +600,64 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 
 También se probó en el navegador (pantalla de ingreso, menú del usuario y vista Usuarios) con un usuario temporal, que después se borró.
 
+## Seguridad: checklist de la Clase 21 (27/10/2026)
+
+**Contexto:** la Clase 21 del Seminario pide pasar una checklist mínima de seguridad sobre el sistema real (base de la sección 5.2 del informe). Se revisó el repo y se corrigió lo que dependía de archivos de Santi o compartidos.
+
+**Ya estaba bien (revisado):**
+- **Sin claves en el repo:** `.env` y `.streamlit/secrets.toml` están en `.gitignore`. Se buscó en todo el historial y no aparece ninguno, ni claves de Supabase.
+- **Consultas parametrizadas:** los únicos SQL armados con texto usan nombres de tabla o columna de listas fijas del código, nunca un dato del usuario.
+
+**Qué se agregó:**
+- **Bloqueo por intentos fallidos** (`usuarios_repo.verificar`).
+  - Con 5 ingresos fallidos seguidos con el mismo nombre de usuario, ese nombre queda bloqueado hasta que el más viejo cumple 15 minutos.
+  - Se cuenta por el nombre escrito, exista o no, así que el mensaje de bloqueo no revela qué usuarios existen.
+  - Un ingreso correcto, o una contraseña nueva puesta por el admin o por consola, reinicia la cuenta.
+  - Bloqueado, no se mira la contraseña.
+- **Cierre de sesión por inactividad** (`sesion.py`).
+  - Se cierra a los 30 minutos sin usar el dashboard. El video reproduciéndose cuenta como uso.
+  - Un fragmento que corre cada 60 s (`vigilar_inactividad`) vuelve a la pantalla de ingreso, para que una laptop desatendida no quede con el partido a la vista.
+- **Registro de accesos y acciones críticas** (`src/db/registro_repo.py`, tabla `registro`).
+  - Registra ingresos (también los fallidos y los bloqueados), salidas, sesiones vencidas, altas, cambios de rol, activaciones, contraseñas cambiadas y respaldos, con quién lo hizo (`actor`: el usuario, `consola` o `sistema`).
+  - Nunca guarda contraseñas ni hashes.
+  - El admin lo ve en la vista Usuarios ("Registro de accesos y cambios"); por consola, con `scripts/usuarios.py registro`.
+  - Las primeras filas de la base real son de la prueba en el navegador del 27/10 (usuario temporal `prueba_ui`, ya borrado). No se editaron: un registro de auditoría no se toca.
+- **Respaldo** (`src/db/respaldo.py`, `scripts/respaldo.py`).
+  - **Qué guarda:** una carpeta con la base (copia con la API de backup de SQLite, consistente aunque el dashboard esté abierto), los JSON de calibración, los parquets de coordenadas y un manifiesto con el SHA-256 de cada archivo y las filas de cada tabla. Los videos quedan afuera.
+  - **Automático:** al ingresar, si el último tiene más de 24 h. Se conservan los últimos 14, en `data/respaldos/` (gitignorado).
+  - **Otro disco:** con `--destino` o con la variable de entorno `ANALIZADOR_DIR_RESPALDOS`.
+  - **Restaurar:** primero verifica el respaldo (SHA-256, `integrity_check`, filas) y hace otro del estado actual, para poder deshacer.
+- **Errores sin datos internos:** `client.showErrorDetails = "none"` en `config.toml`. El navegador muestra un mensaje genérico y el detalle va a la terminal. Para desarrollar: `STREAMLIT_CLIENT_SHOW_ERROR_DETAILS=full`.
+- **El dashboard escucha solo en esta laptop:** `server.address = "localhost"`.
+  - Antes escuchaba en todas las interfaces: cualquiera en el mismo wifi podía abrir el dashboard y pedirle videos al servidor de `video_sync.py` (que usa la misma dirección).
+  - Para usarlo desde una tablet en la red local: `--server.address 0.0.0.0`.
+- **Dependencias fijadas:** todas con `==`, a las versiones probadas juntas con Python 3.12.
+  - Se sacaron `ultralytics` (el modelo YOLOv8 inicial, ya no se importa) y `pyyaml`.
+  - Se agregó `numpy`, que se importa directo y no estaba declarado.
+  - En un entorno limpio, `pip install --dry-run -r requirements.txt` resuelve 244 paquetes sin conflictos.
+
+**Verificado:**
+- **Pruebas sobre una copia de la base, 24 de 24:**
+  - bloqueo a los 5 fallidos aunque después llegue la clave buena;
+  - el bloqueo también aplica a un usuario que no existe, y se levanta pasada la ventana o con una contraseña nueva;
+  - comprobar la contraseña actual no cuenta como ingreso;
+  - el registro no contiene contraseñas ni hashes;
+  - restauración real: base con usuarios y eventos borrados y una calibración pisada vuelven al estado del respaldo;
+  - un respaldo alterado no se restaura;
+  - poda.
+- **AppTest:** bloqueo desde la pantalla de ingreso, respaldo automático al ingresar, cierre a los 31 min de inactividad (a los 29 sigue adentro), "Salir" registrado y registro visible para el admin. El de roles y los recorridos generales dan igual que antes.
+- **En el navegador:**
+  - el servidor escucha solo en `127.0.0.1`: desde la IP de la red, conexión rechazada;
+  - el video de `sportivo_crop3` carga;
+  - con el video reproduciéndose, después de una pasada del vigilante, avanzó 76.9 s en 76.9 s reales, sin pausarse ni volver a montarse.
+
+**Visto de paso, sin relación con esto:** `partido_clip` y `partido_clip2` siguen con el video anotado en el códec viejo (`mpeg4`), que Chromium no reproduce. Se arregla con `scripts/regenerar_video_anotado.py`, como ya se hizo con `sportivo_crop3`.
+
+**Falta (archivos de Luci y Nico, o decisiones pendientes):**
+- modos de solo lectura del Semáforo, del plantel y del historial de eventos;
+- registrar quién tagueó cada evento y quién calificó el semáforo;
+- RLS en Supabase.
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.

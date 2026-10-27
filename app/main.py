@@ -40,7 +40,8 @@ from components.video_registry import render_video_registry
 from components.tactical_patterns_view import render_tactical_patterns_tab
 
 # Login local, roles y administración de usuarios (src/db/usuarios_repo.py)
-from components.sesion import nombre_rol, puede, render_login, render_menu_usuario, usuario_actual
+from components.sesion import (nombre_rol, puede, render_login, render_menu_usuario, usuario_actual,
+                               vigilar_inactividad)
 from components.usuarios_view import render_usuarios
 
 # Partidos de dos tiempos: un video por tiempo (src/db/partido_repo.py)
@@ -438,6 +439,8 @@ def main():
     if usuario is None:
         render_login(_HTML_MARCA)
         return
+    # Cierra la sesión sola tras un rato sin uso (ver sesion.py).
+    vigilar_inactividad()
     # Si el rol cambió y la vista elegida ya no le corresponde, vuelve a la Mesa táctica.
     vistas = _vistas_permitidas()
     if st.session_state.get("vista") not in vistas:

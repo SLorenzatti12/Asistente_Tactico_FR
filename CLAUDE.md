@@ -36,7 +36,15 @@ python3 scripts/usuarios.py crear <usuario> --nombre "Nombre Apellido" --rol adm
 streamlit run app/main.py
 ```
 
-El dashboard pide usuario y contraseña (login local, sin internet; ver "Login local y roles" en `decisiones.md`). Para AppTest, iniciar la sesión con `at.session_state["usuario_id"] = <id>` antes del primer `run()` y apuntar `usuarios_repo.DB_PATH` a una copia de la base.
+El dashboard pide usuario y contraseña (login local, sin internet; ver "Login local y roles" y "Seguridad: checklist de la Clase 21" en `decisiones.md`). Escucha solo en `localhost` y en el navegador muestra errores genéricos; para ver el traceback al desarrollar: `STREAMLIT_CLIENT_SHOW_ERROR_DETAILS=full streamlit run app/main.py`. Para AppTest, iniciar la sesión con `at.session_state["usuario_id"] = <id>` antes del primer `run()`, apuntar `DB_PATH` de `usuarios_repo`, `registro_repo` y `respaldo` a una copia de la base, y `ANALIZADOR_DIR_RESPALDOS` a una carpeta temporal (si no, el respaldo automático del ingreso escribe en `data/respaldos/`).
+
+```bash
+# Respaldo de la base, calibraciones y parquets (el dashboard hace uno automático al ingresar, cada 24 h)
+python3 scripts/respaldo.py crear [--destino /Volumes/PENDRIVE/respaldos]
+python3 scripts/respaldo.py listar
+python3 scripts/respaldo.py restaurar data/respaldos/respaldo_<fecha> [--con-archivos]
+python3 scripts/usuarios.py registro      # últimos accesos y cambios
+```
 
 No hay suite de tests, linter ni build configurados en el repo (sin `pytest`, sin `.flake8`/`pyproject.toml`, sin Makefile). Para verificar un cambio de UI sin depender del navegador, se puede usar `streamlit.testing.v1.AppTest` para correr `app/main.py` real y clickear widgets por `key` desde un script — ver cualquier sesión reciente que haya tocado `app/` para el patrón.
 
@@ -119,6 +127,8 @@ Piezas locales (`src/db/`), cada una dueña de su propia tabla en el mismo archi
 - `estadio_repo.py` — estadios con las medidas de su cancha (`estadios`) y en cuál se jugó cada partido (`match_estadio`). Alta/listado/asignación con `scripts/estadios.py`; lo consume `calibrate.py --estadio`.
 - `partido_repo.py` — agrupa los dos videos (uno por tiempo) de un partido (`partido_tiempos`). Alta con `scripts/partidos.py`, que copia equipo y estadio a los dos tiempos. Solo local por ahora.
 - `usuarios_repo.py` — usuarios del dashboard (contraseña con hash scrypt, nunca en claro), los cuatro roles y la matriz de permisos. Solo local: no se sincroniza.
+- `registro_repo.py` — registro de accesos y acciones críticas (tabla `registro`): ingresos y fallidos, cambios de usuarios, respaldos. Fuente del bloqueo por intentos fallidos. Nunca guarda contraseñas. Solo local.
+- `respaldo.py` — respaldo verificable (SHA-256 + `integrity_check`) de la base, calibraciones y parquets, y su restauración. CLI: `scripts/respaldo.py`.
 - `roster_repo.py` — plantel de jugadores **por equipo**, cargado una sola vez y reutilizado en todos sus partidos (no por partido). Baja = `DELETE` físico, a propósito (no hay soft delete).
 - `video_repo.py` — ruta local del video crudo de cada partido, y si ya se subió.
 - `local.py` — helpers de solo-lectura sobre `events`/`semaforo` (tablas de `tagging.py`) para el sync.

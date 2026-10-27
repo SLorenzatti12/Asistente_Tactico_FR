@@ -12,6 +12,12 @@
 # claro/oscuro de main.py se sacó el 22/10/2026).
 
 [server]
+# Solo escucha en esta laptop: nadie en la misma red (el wifi del club o de
+# la cancha) puede abrir el dashboard ni pedirle videos al servidor de
+# video_sync.py, que usa la misma dirección. Para usarlo desde una tablet en
+# la red local, levantar con: streamlit run app/main.py --server.address 0.0.0.0
+address = "localhost"
+
 # Sirve archivos desde app/static/ bajo la URL /app/static/<...> (con soporte
 # de range requests, necesario para poder arrastrar la barra del video). Lo
 # usa components/video_sync.py para exponerle el video al reproductor
@@ -21,6 +27,13 @@ enableStaticServing = true
 # Límite de subida en MB. El default de Streamlit es 200MB, insuficiente
 # para un video de partido completo.
 maxUploadSize = 2000
+
+[client]
+# Si algo falla, el navegador muestra un mensaje genérico, sin traceback,
+# rutas de archivos ni datos internos; el detalle completo sale en la
+# terminal donde corre Streamlit. Para desarrollar con el error en pantalla:
+#   STREAMLIT_CLIENT_SHOW_ERROR_DETAILS=full streamlit run app/main.py
+showErrorDetails = "none"
 
 [theme]
 base = "dark"

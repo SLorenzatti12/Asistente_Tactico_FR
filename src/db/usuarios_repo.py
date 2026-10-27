@@ -16,6 +16,14 @@ docs/context/8-base-de-datos-hibrida.md).
 Roles: los mismos cuatro del esquema de la nube (db/schema_cloud.sql).
 El primer admin se crea por consola (scripts/usuarios.py); después el admin
 administra el resto desde la vista "Usuarios" del dashboard.
+
+Cada ingreso (correcto o no) y cada cambio queda en el registro
+(registro_repo), con quién lo hizo: `actor` es el usuario de la sesión, o
+None si viene de la consola. Después de MAX_INTENTOS_FALLIDOS ingresos
+fallidos seguidos con el mismo nombre de usuario, ese nombre queda
+bloqueado hasta que el más viejo salga de la ventana de
+VENTANA_BLOQUEO_MIN minutos (un ingreso correcto o una contraseña nueva
+puesta por el admin reinician la cuenta).
 """
 from __future__ import annotations
 
@@ -24,8 +32,10 @@ import hashlib
 import hmac
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+
+from src.db import registro_repo
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "db" / "analizador.sqlite"
 
@@ -47,6 +57,16 @@ PERMISOS = {
 }
 
 MIN_LARGO_CONTRASENA = 8
+MAX_INTENTOS_FALLIDOS = 5
+VENTANA_BLOQUEO_MIN = 15
+
+
+class IngresoBloqueado(Exception):
+    """Demasiados ingresos fallidos seguidos con ese nombre de usuario."""
+
+    def __init__(self, minutos: int):
+        super().__init__(f"Demasiados intentos fallidos. Probá de nuevo en {minutos} min.")
+        self.minutos = minutos
 
 # scrypt: N=2^14, r=8, p=1 (~16 MB, decenas de ms por intento en una laptop).
 _SCRYPT = {"n": 2 ** 14, "r": 8, "p": 1, "dklen": 32}
@@ -120,7 +140,7 @@ def _publico(row: sqlite3.Row | None) -> dict | None:
     return d
 
 
-def crear_usuario(usuario: str, nombre: str, rol: str, contrasena: str) -> dict:
+def crear_usuario(usuario: str, nombre: str, rol: str, contrasena: str, actor: dict | None = None) -> dict:
     usuario = usuario.strip()
     if not usuario or not nombre.strip():
         raise ValueError("Usuario y nombre son obligatorios.")
@@ -138,28 +158,70 @@ def crear_usuario(usuario: str, nombre: str, rol: str, contrasena: str) -> dict:
         except sqlite3.IntegrityError:
             raise ValueError(f"Ya existe el usuario '{usuario}'.") from None
         conn.commit()
-        return _publico(conn.execute("SELECT * FROM usuarios WHERE usuario = ?", (usuario,)).fetchone())
+        creado = _publico(conn.execute("SELECT * FROM usuarios WHERE usuario = ?", (usuario,)).fetchone())
     finally:
         conn.close()
+    registro_repo.registrar("usuario_creado", actor, objetivo=creado["usuario"], detalle=f"rol: {rol}")
+    return creado
+
+
+def minutos_de_bloqueo(usuario: str) -> int:
+    """0 si ese nombre de usuario puede intentar ingresar; si no, los minutos
+    que faltan (redondeados para arriba) para que se desbloquee."""
+    fallidos = registro_repo.fallidos_recientes(usuario.strip(), VENTANA_BLOQUEO_MIN)
+    if len(fallidos) < MAX_INTENTOS_FALLIDOS:
+        return 0
+    # Se desbloquea cuando el más viejo de los últimos N sale de la ventana.
+    desde = datetime.fromisoformat(fallidos[-MAX_INTENTOS_FALLIDOS])
+    falta = desde + timedelta(minutes=VENTANA_BLOQUEO_MIN) - datetime.now()
+    return max(1, -(-int(falta.total_seconds()) // 60))
 
 
 def verificar(usuario: str, contrasena: str) -> dict | None:
     """El usuario si la contraseña es correcta y está activo; None si no.
-    Registra el último ingreso."""
+    Registra el intento. Lanza IngresoBloqueado si ese nombre de usuario
+    tiene demasiados intentos fallidos recientes (sin mirar la contraseña)."""
+    usuario = usuario.strip()
+    minutos = minutos_de_bloqueo(usuario)
+    if minutos:
+        registro_repo.registrar("ingreso_bloqueado", None, objetivo=usuario)
+        raise IngresoBloqueado(minutos)
     conn = _connect()
     try:
-        row = conn.execute("SELECT * FROM usuarios WHERE usuario = ?", (usuario.strip(),)).fetchone()
+        row = conn.execute("SELECT * FROM usuarios WHERE usuario = ?", (usuario,)).fetchone()
         if row is None:
             _coincide(contrasena, _hashear("relleno"))   # mismo costo que un usuario real
-            return None
-        if not _coincide(contrasena, row["hash_contrasena"]) or not row["activo"]:
+            ok = False
+        else:
+            ok = _coincide(contrasena, row["hash_contrasena"]) and bool(row["activo"])
+        if not ok:
+            registro_repo.registrar("ingreso_fallido", None, objetivo=usuario)
             return None
         conn.execute("UPDATE usuarios SET ultimo_ingreso = ? WHERE id = ?",
                      (datetime.now().isoformat(timespec="seconds"), row["id"]))
         conn.commit()
-        return _publico(conn.execute("SELECT * FROM usuarios WHERE id = ?", (row["id"],)).fetchone())
+        u = _publico(conn.execute("SELECT * FROM usuarios WHERE id = ?", (row["id"],)).fetchone())
     finally:
         conn.close()
+    registro_repo.registrar("ingreso", u, objetivo=u["usuario"])
+    return u
+
+
+def comprobar_contrasena(usuario_id: int, contrasena: str) -> bool:
+    """¿Es la contraseña de este usuario? Para pedir la actual antes de
+    cambiarla: no cuenta como ingreso ni actualiza el último ingreso."""
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT usuario, hash_contrasena FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return False
+    if _coincide(contrasena, row["hash_contrasena"]):
+        return True
+    registro_repo.registrar("contrasena_actual_incorrecta", {"id": usuario_id, "usuario": row["usuario"]},
+                            objetivo=row["usuario"])
+    return False
 
 
 def obtener(usuario_id: int) -> dict | None:
@@ -191,7 +253,12 @@ def _admins_activos(conn: sqlite3.Connection, salvo: int | None = None) -> int:
                         (salvo if salvo is not None else -1,)).fetchone()[0]
 
 
-def cambiar_rol(usuario_id: int, rol: str) -> None:
+def _nombre(conn: sqlite3.Connection, usuario_id: int) -> str | None:
+    row = conn.execute("SELECT usuario FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+    return row["usuario"] if row else None
+
+
+def cambiar_rol(usuario_id: int, rol: str, actor: dict | None = None) -> None:
     if rol not in ROLES:
         raise ValueError(f"Rol desconocido: {rol}")
     conn = _connect()
@@ -202,11 +269,14 @@ def cambiar_rol(usuario_id: int, rol: str) -> None:
             raise ValueError("Tiene que quedar al menos un administrador activo.")
         conn.execute("UPDATE usuarios SET rol = ? WHERE id = ?", (rol, usuario_id))
         conn.commit()
+        nombre = _nombre(conn, usuario_id)
     finally:
         conn.close()
+    if actual and actual["rol"] != rol:
+        registro_repo.registrar("rol_cambiado", actor, objetivo=nombre, detalle=f"rol: {actual['rol']} → {rol}")
 
 
-def cambiar_activo(usuario_id: int, activo: bool) -> None:
+def cambiar_activo(usuario_id: int, activo: bool, actor: dict | None = None) -> None:
     conn = _connect()
     try:
         actual = conn.execute("SELECT rol, activo FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
@@ -215,11 +285,16 @@ def cambiar_activo(usuario_id: int, activo: bool) -> None:
             raise ValueError("Tiene que quedar al menos un administrador activo.")
         conn.execute("UPDATE usuarios SET activo = ? WHERE id = ?", (int(activo), usuario_id))
         conn.commit()
+        nombre = _nombre(conn, usuario_id)
     finally:
         conn.close()
+    if actual and bool(actual["activo"]) != activo:
+        registro_repo.registrar("usuario_activado" if activo else "usuario_desactivado", actor, objetivo=nombre)
 
 
-def cambiar_contrasena(usuario_id: int, contrasena: str) -> None:
+def cambiar_contrasena(usuario_id: int, contrasena: str, actor: dict | None = None) -> None:
+    """Pone una contraseña nueva. Si la pone otro (el admin o la consola),
+    además desbloquea el ingreso de ese usuario."""
     error = validar_contrasena(contrasena)
     if error:
         raise ValueError(error)
@@ -227,8 +302,12 @@ def cambiar_contrasena(usuario_id: int, contrasena: str) -> None:
     try:
         conn.execute("UPDATE usuarios SET hash_contrasena = ? WHERE id = ?", (_hashear(contrasena), usuario_id))
         conn.commit()
+        nombre = _nombre(conn, usuario_id)
     finally:
         conn.close()
+    propia = actor is not None and actor.get("id") == usuario_id
+    registro_repo.registrar("contrasena_cambiada", actor, objetivo=nombre,
+                            detalle="la propia" if propia else "puesta por otro usuario o por consola")
 
 
 def obtener_por_usuario(usuario: str) -> dict | None:

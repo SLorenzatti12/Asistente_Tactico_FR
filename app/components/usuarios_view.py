@@ -2,7 +2,8 @@
 Analizador Táctico — Vista "Usuarios" (solo administradores)
 ==============================================================
 Santi. Alta de usuarios, cambio de rol, contraseña nueva y activar o
-desactivar, sobre src/db/usuarios_repo.py. Siempre queda al menos un
+desactivar, sobre src/db/usuarios_repo.py, y el registro de accesos y
+cambios (src/db/registro_repo.py). Siempre queda al menos un
 administrador activo (lo controla el repositorio), y un admin no se puede
 desactivar ni quitar el rol a sí mismo desde acá, para no quedar afuera a
 mitad de la sesión.
@@ -18,7 +19,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.db import usuarios_repo  # noqa: E402
+from src.db import registro_repo, usuarios_repo  # noqa: E402
 
 ROLES = usuarios_repo.ROLES
 DESCRIPCION_ROLES = {
@@ -29,7 +30,7 @@ DESCRIPCION_ROLES = {
 }
 
 
-def _alta() -> None:
+def _alta(yo: dict) -> None:
     with st.form("alta_usuario", clear_on_submit=True, border=True):
         st.markdown("**Nuevo usuario**")
         c1, c2 = st.columns(2)
@@ -45,7 +46,7 @@ def _alta() -> None:
                 st.error("Las contraseñas no coinciden.")
                 return
             try:
-                u = usuarios_repo.crear_usuario(usuario, nombre, rol, contrasena)
+                u = usuarios_repo.crear_usuario(usuario, nombre, rol, contrasena, actor=yo)
             except ValueError as e:
                 st.error(str(e))
                 return
@@ -71,7 +72,7 @@ def _editar(usuarios: list[dict], yo: dict) -> None:
                            help="No podés cambiar tu propio rol." if es_yo else DESCRIPCION_ROLES[u["rol"]])
         if c2.button("Guardar rol", key=f"guardar_rol_{u['id']}", disabled=es_yo or rol == u["rol"], width="stretch"):
             try:
-                usuarios_repo.cambiar_rol(u["id"], rol)
+                usuarios_repo.cambiar_rol(u["id"], rol, actor=yo)
                 st.rerun()
             except ValueError as e:
                 st.error(str(e))
@@ -81,7 +82,7 @@ def _editar(usuarios: list[dict], yo: dict) -> None:
                               help="Para cuando alguien se la olvidó. Pasale la nueva por un canal seguro.")
         if c4.button("Poner contraseña", key=f"guardar_contrasena_{u['id']}", disabled=not nueva, width="stretch"):
             try:
-                usuarios_repo.cambiar_contrasena(u["id"], nueva)
+                usuarios_repo.cambiar_contrasena(u["id"], nueva, actor=yo)
                 st.success("Contraseña actualizada.")
             except ValueError as e:
                 st.error(str(e))
@@ -91,12 +92,12 @@ def _editar(usuarios: list[dict], yo: dict) -> None:
                          disabled=es_yo, help="No podés desactivarte a vos mismo." if es_yo else
                          "No borra nada: el usuario no puede ingresar hasta que se lo vuelva a activar."):
                 try:
-                    usuarios_repo.cambiar_activo(u["id"], False)
+                    usuarios_repo.cambiar_activo(u["id"], False, actor=yo)
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
         elif st.button("Activar usuario", key=f"activar_{u['id']}", icon=":material/person_check:"):
-            usuarios_repo.cambiar_activo(u["id"], True)
+            usuarios_repo.cambiar_activo(u["id"], True, actor=yo)
             st.rerun()
 
 
@@ -120,4 +121,23 @@ def render_usuarios(yo: dict) -> None:
                 st.markdown(f"- **{ROLES[rol]}:** {texto}")
     with col_acciones:
         _editar(usuarios, yo)
-    _alta()
+    _alta(yo)
+    _registro()
+
+
+def _registro() -> None:
+    """Las últimas acciones registradas: ingresos (también los fallidos),
+    salidas, cambios de usuarios y respaldos. No incluye contraseñas."""
+    with st.expander("Registro de accesos y cambios"):
+        filas = registro_repo.listar(limite=300)
+        if not filas:
+            st.caption("Todavía no hay nada registrado.")
+            return
+        st.dataframe(pd.DataFrame([{
+            "Fecha": f["fecha"].replace("T", " "),
+            "Quién": f["actor"],
+            "Acción": registro_repo.ACCIONES.get(f["accion"], f["accion"]),
+            "Sobre": f["objetivo"] or "",
+            "Detalle": f["detalle"] or "",
+        } for f in filas]), hide_index=True, width="stretch", height=320)
+        st.caption("Las 300 más recientes. Se guarda en la base local, junto con los usuarios.")

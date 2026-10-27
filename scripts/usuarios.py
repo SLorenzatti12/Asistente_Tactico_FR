@@ -9,7 +9,8 @@ en el historial de la terminal).
 Ejemplos:
     python3 scripts/usuarios.py crear santi --nombre "Santiago Lorenzatti" --rol admin
     python3 scripts/usuarios.py listar
-    python3 scripts/usuarios.py contrasena santi        # si alguien se olvidó la suya
+    python3 scripts/usuarios.py contrasena santi        # si alguien se olvidó la suya (y lo desbloquea)
+    python3 scripts/usuarios.py registro                # últimos accesos y cambios
 
 Roles: admin, analyst (analista), coach (cuerpo técnico), viewer (solo lectura).
 """
@@ -22,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.db import usuarios_repo  # noqa: E402
+from src.db import registro_repo, usuarios_repo  # noqa: E402
 
 
 def _pedir_contrasena() -> str:
@@ -47,11 +48,18 @@ def main() -> None:
     crear.add_argument("--nombre", required=True)
     crear.add_argument("--rol", default="admin", choices=list(usuarios_repo.ROLES))
     sub.add_parser("listar", help="Lista los usuarios")
+    registro = sub.add_parser("registro", help="Últimos accesos y cambios")
+    registro.add_argument("-n", type=int, default=40, help="Cuántas filas (default 40)")
     contrasena = sub.add_parser("contrasena", help="Pone una contraseña nueva")
     contrasena.add_argument("usuario")
     args = parser.parse_args()
 
     usuarios_repo.init_usuarios_table()
+    if args.comando == "registro":
+        for f in reversed(registro_repo.listar(limite=args.n)):
+            print(f"{f['fecha'].replace('T', ' ')}  {f['actor']:<14} "
+                  f"{registro_repo.ACCIONES.get(f['accion'], f['accion']):<42} {f['objetivo'] or '':<16} {f['detalle'] or ''}")
+        return
     if args.comando == "listar":
         usuarios = usuarios_repo.listar()
         if not usuarios:
