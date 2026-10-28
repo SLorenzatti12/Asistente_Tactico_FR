@@ -873,6 +873,49 @@ También se probó en el navegador (pantalla de ingreso, menú del usuario y vis
 
 **No verificado:** nada de esto se corrió contra el proyecto real de Supabase. Las credenciales no están en esta máquina (están en la de Nico), y aplicarlo es un cambio en la nube que tiene que hacer quien tenga acceso al dashboard. Los pasos están en `8-base-de-datos-hibrida.md` ("Seguridad de la nube"). **Hasta que se apliquen, el riesgo R2 sigue abierto.**
 
+## 2° tiempo de Sportivo – Crecer: primer partido con los dos tiempos (28/10/2026)
+
+**El video:** `IMG_8977.MOV` (Descargas de Santi). Santi confirmó que es el **2° tiempo**, aunque los horarios de grabación dicen lo contrario:
+
+| Archivo | Inicio de grabación | Duración | Cuadros/s |
+|---|---|---|---|
+| `IMG_8977.MOV` | 24/09 22:08:38 | 27:43 | 29,97 |
+| `SportivoVsCrecer.MOV` (origen de `sportivo_crop3`) | 24/09 23:09:00 | 26:49 | 25 |
+
+El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone graban a 29,97). Si algún día aparece evidencia en contra (reloj, marcador), los dos tiempos se intercambian con `scripts/partidos.py alta`.
+
+**Procesado igual que el 1° tiempo:**
+- **Recorte:** la misma franja de cancha que `sportivo_crop3`, `crop=1920:460:0:620`, medida con coincidencia exacta (1.000) contra el MOV del 1° tiempo. Queda en `data/videos/sportivo_t2.mp4` (H.264, 406 MB); el original queda en Descargas, sin tocar.
+- **Detección:** `run_inference --skip 3`, 3.000 tracks en 27,8 min (el 1° tiempo tuvo 2.871 en 26,8 min). Video anotado en H.264, 118 MB.
+- **Calibración:** propagada desde el 1° tiempo (`--desde-calibracion`), con 749 coincidencias de registro.
+  - La cámara **se movió** entre tiempos: sin corregir habría 10 m de error de posición.
+  - Se excluyen 0:00–0:13 (cámara acomodándose; 2.222 detecciones). La verificación de cámara da válida en el resto.
+- **Equipos:** con los colores del 1° tiempo como referencia (diferencia 4,5–4,6, umbral 12), las etiquetas home/away quedan iguales a las del 1°. 803 tracks home, 645 away, 1.380 sin asignar (fragmentos cortos). El parquet sin equipos quedó en `sportivo_t2_coords_field_sin_equipos.parquet`.
+- **Partido registrado:** "Sportivo vs Crecer" (`sportivo_crop3` = 1°, `sportivo_t2` = 2°), con equipo y estadio asignados a los dos.
+- **Control entre tiempos:** OK, los equipos cambiaron de lado. Ningún video tiene los dos tiempos juntos.
+
+**Excepción a la regla de calibración (control OK y mirar la imagen):** el control dio **REVISAR** y la calibración se usa igual, con esta evidencia.
+- **El veredicto sale de una sola línea.** Mediana 0,32 m, p90 2,77 m. Calzan la línea media (0,32 m), el círculo (0,21 m) y el área grande derecha (1,05 m). Lo que falla es la **línea de fondo derecha, a 6,18 m**.
+- **Los 9 puntos de calibración propagados caen sobre las marcas reales** del 2° tiempo, a 1–3 px. Revisado ampliado ×8: postes de los dos arcos, medialuna y área chica izquierdas, cruce de la línea media y área chica derecha. Es la misma precisión de la medición a mano del 1° tiempo.
+- **Los errores de esa línea están todos en el tramo del córner lejano,** pegado a la base de los carteles. Ahí el control encuentra una línea "casi paralela" a varios metros, que muy probablemente es el borde de los carteles.
+  - En el 1° tiempo esa línea casi no se encontraba (6–26% de las muestras), así que quedaba "no verificada" y no pesaba.
+  - El córner lejano proyectado cae donde el pasto toca la base de los carteles, a 2–3 px.
+- **Prueba independiente con los arqueros:** el 10% de detecciones de arquero más cercano a la línea de fondo derecha está a 3,2 m, contra 3,5 m en el 1° tiempo validado. Con la línea corrida 6 m daría ~9 m.
+- **Ninguna detección cae afuera de la cancha de 102 × 75** (con margen de 1,5 m), igual que en el 1° tiempo.
+- **Límite:** sin banderín visible, la posición a lo largo del córner lejano no se puede confirmar con la imagen. La evidencia es el conjunto de arriba.
+
+**Patrones del 2° tiempo:**
+
+| | Criterios vigentes | 60% del tiempo | Prueba (30% · 50% · 2 m) |
+|---|---|---|---|
+| 1° tiempo | 1 | 4 | 16 |
+| 2° tiempo | 3: `desconectado` #82 (0:43) y **`no_achica` #696 (5:31) y #1394 (12:02)** | 9 | 24 |
+
+- Son los **primeros "no achica" con datos reales**. En el 1° tiempo no hubo 4 subidas evaluables por jugador.
+- Todavía sin calificar.
+
+**Verificado en el dashboard (AppTest):** el partido aparece agrupado con sus dos tiempos, y las cuatro vistas abren sin errores en el 2° tiempo. Patrones muestra los 3 momentos y "los equipos cambiaron de lado". El Semáforo usa una sola planilla para el partido.
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.
