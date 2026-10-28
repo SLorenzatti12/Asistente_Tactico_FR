@@ -903,6 +903,21 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
 - **Prueba independiente con los arqueros:** el 10% de detecciones de arquero más cercano a la línea de fondo derecha está a 3,2 m, contra 3,5 m en el 1° tiempo validado. Con la línea corrida 6 m daría ~9 m.
 - **Ninguna detección cae afuera de la cancha de 102 × 75** (con margen de 1,5 m), igual que en el 1° tiempo.
 - **Límite:** sin banderín visible, la posición a lo largo del córner lejano no se puede confirmar con la imagen. La evidencia es el conjunto de arriba.
+- **Por qué el error de esa línea no puede ser de la calibración:** una homografía transforma rectas en rectas. Los dos postes del arco derecho están sobre la línea de fondo y la calibración los ubica a 1–2 px. Entonces la línea de fondo proyectada coincide con la real en toda su extensión, y lo único que no queda fijado así es la posición *a lo largo* de la línea, que el control no mide. Lo que el control encuentra a 5–6 m es otra cosa: el borde de los carteles, o la pintura irregular de esa línea ya vista en el 1° tiempo.
+
+**Recalibración independiente, por precaución (28/10/2026, pedido de Santi):**
+- **Qué se hizo:** una calibración con puntos medidos sobre el propio cuadro 24877 del 2° tiempo, en `data/calibracion/sportivo_t2_puntos_f24877.json`.
+  - Son 6 puntos: bases de los cuatro postes y punta de la medialuna izquierda, ampliados ×8, y los cruces del círculo con la línea media (recta al sub-píxel con residuo 0,22 px y elipse ajustada).
+  - Se omitieron el frente del área chica izquierda y la esquina del área chica derecha: en ese cuadro son demasiado tenues para medirlos sin extrapolar.
+- **Control:** también **REVISAR, por la misma línea de fondo derecha** (5,25 m). Dos calibraciones por caminos distintos fallan en el mismo lugar.
+- **Las dos coinciden:** diferencia entre ellas sobre la cancha visible, cada 3 m, de mediana 0,67 m, p90 1,51 m y máximo 1,87 m; en la banda lejana 1,32 m de mediana. Está dentro de la tolerancia que el proyecto usa para decir que una calibración "vale" (mediana ≤ 1 m, p90 ≤ 2 m), y el arco derecho no se separa del resto.
+- **Ninguna gana con claridad:**
+  - la medida calza un poco mejor la línea media (0,21 m contra 0,32), pero sus puntos no cierran del todo (la medialuna queda con 1,1 m de residuo, ruido de lectura sobre marcas borrosas);
+  - la propagada sale de los 9 puntos sub-píxel del 1° tiempo.
+- **Decisión: queda la propagada** (con la que están el parquet, los equipos y los patrones).
+  - La medida se guarda como segunda opinión en `sportivo_t2_homography_medida.json` (y su imagen de control).
+  - Los respaldos de antes de recalibrar quedaron en `*_propagada_20261028_195116.*`.
+  - Verificado después de restaurar: el parquet vigente es idéntico al respaldo (coordenadas y equipos) y la cámara es estable fuera de 0:00–0:13.
 
 **Patrones del 2° tiempo:**
 
