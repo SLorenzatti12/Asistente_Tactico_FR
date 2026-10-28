@@ -46,6 +46,8 @@ python3 scripts/respaldo.py restaurar data/respaldos/respaldo_<fecha> [--con-arc
 python3 scripts/usuarios.py registro      # últimos accesos y cambios
 ```
 
+**Después de cambiar algo en `src/`, reiniciar el dashboard.** Streamlit recarga solo los módulos de `app/` cuando cambian; los de `src/` quedan en memoria con la versión vieja, y la mezcla puede romper (28/10/2026: la vista de Patrones nueva pedía un criterio que el `tactical_patterns` en memoria no tenía → `KeyError`). AppTest no lo detecta porque arranca de cero.
+
 No hay suite de tests, linter ni build configurados en el repo (sin `pytest`, sin `.flake8`/`pyproject.toml`, sin Makefile). Para verificar un cambio de UI sin depender del navegador, se puede usar `streamlit.testing.v1.AppTest` para correr `app/main.py` real y clickear widgets por `key` desde un script — ver cualquier sesión reciente que haya tocado `app/` para el patrón.
 
 Para probar el dashboard sin un video/pipeline real, generar datos sintéticos:
