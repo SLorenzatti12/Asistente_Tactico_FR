@@ -297,7 +297,39 @@ CRITERIOS_POR_DEFECTO = {
     "umbral_no_achica_m": UMBRAL_NO_ACHICA_M,
     "min_fases_ataque": MIN_FASES_ATAQUE,
     "proporcion_no_achica": PROPORCION_MIN_NO_ACHICA,
+    # Excepción por pelota parada (28/10/2026): los segundos posteriores a
+    # cada evento "Pelota parada" TAGUEADO por el analista no cuentan para
+    # ningún patrón (en una pelota parada todos están fuera de su línea a
+    # propósito). Usa los tags, no la detección de pelota, que tiene recall
+    # bajo. 0 = no se excluye nada (vigente: así el resultado no cambia).
+    "ventana_pelota_parada_seg": 0.0,
 }
+
+
+def tramos_pelota_parada(tiempos_tag, ventana_seg: float) -> list[tuple[float, float]]:
+    """Los tramos (desde, hasta) que no cuentan: de cada tag "Pelota parada"
+    a `ventana_seg` segundos después. El tag ya se guarda unos segundos antes
+    de apretar el botón (tagging.TAG_TIME_BUFFER_SEC), así que el tramo
+    empieza un poco antes de la jugada."""
+    if not ventana_seg or ventana_seg <= 0:
+        return []
+    return [(float(t), float(t) + float(ventana_seg)) for t in sorted(tiempos_tag or [])]
+
+
+def _sin_tramos(df: pd.DataFrame, tramos: list) -> pd.DataFrame:
+    if not tramos or df.empty or "time_sec" not in df.columns:
+        return df
+    fuera = pd.Series(True, index=df.index)
+    for desde, hasta in tramos:
+        fuera &= ~((df["time_sec"] >= desde) & (df["time_sec"] < hasta))
+    filtrado = df[fuera]
+    filtrado.attrs = dict(df.attrs)
+    return filtrado
+
+
+def _solapamiento(t0: float, t1: float, tramos: list) -> float:
+    """Segundos de [t0, t1] que caen dentro de los tramos excluidos."""
+    return sum(max(0.0, min(t1, hasta) - max(t0, desde)) for desde, hasta in tramos)
 
 
 def criterios_completos(criterios: dict | None = None) -> dict:
@@ -707,10 +739,12 @@ def _desviacion_linea_por_frame(jugadores: pd.DataFrame, direccion: dict) -> pd.
     return resultado
 
 
-def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame, criterios: dict) -> tuple:
+def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame, criterios: dict,
+                           tramos_excluidos: list | None = None) -> tuple:
     """Implementa el patrón 'desconectado' — ver detectar_patrones()."""
     umbral = criterios["umbral_desconexion"]
     proporcion_min = criterios["proporcion_desconexion"]
+    tramos_excluidos = tramos_excluidos or []
     filas = []
     no_evaluados = []
 
@@ -792,7 +826,11 @@ def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame, criterios:
             # coincidan con un desmarque puntual o una marca personal — ver
             # PROPORCION_MIN_DESCONEXION.
             duracion_desviado = sum(fin - ini for ini, fin in segmentos)
-            duracion_en_cancha = sub_track["time_sec"].iloc[-1] - sub_track["time_sec"].iloc[0]
+            t0, t1 = sub_track["time_sec"].iloc[0], sub_track["time_sec"].iloc[-1]
+            # Lo excluido (pelota parada) no cuenta como tiempo en cancha:
+            # si no, la proporción se calcularía contra un total que incluye
+            # segundos que no se miraron.
+            duracion_en_cancha = (t1 - t0) - _solapamiento(t0, t1, tramos_excluidos)
             proporcion_desviado = duracion_desviado / duracion_en_cancha if duracion_en_cancha > 0 else 0.0
             if proporcion_desviado <= proporcion_min:
                 continue
@@ -1092,7 +1130,7 @@ def agrupar_candidatos_fusion(candidatos: pd.DataFrame, tracks) -> dict[int, lis
 
 
 def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFrame,
-                      criterios: dict | None = None) -> pd.DataFrame:
+                      criterios: dict | None = None, pelotas_paradas=None) -> pd.DataFrame:
     """
     Corre los patrones implementados (desconectado, no_achica) y devuelve
     una fila por (track_id, patrón detectado) — solo para las combinaciones
@@ -1144,11 +1182,17 @@ def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFram
     # que realmente se usó, para que el resultado diga con qué criterio salió.
     criterios = criterios_completos(criterios)
     criterios["umbral_avance_ms"] = fases.attrs.get("umbral_avance_ms", criterios["umbral_avance_ms"])
+    # `pelotas_paradas`: segundos de los tags "Pelota parada" del analista.
+    # Con ventana_pelota_parada_seg > 0, esos tramos no cuentan para ningún
+    # patrón (se sacan de líneas y fases, y del tiempo en cancha).
+    tramos_excluidos = tramos_pelota_parada(pelotas_paradas, criterios["ventana_pelota_parada_seg"])
+    lineas = _sin_tramos(lineas, tramos_excluidos)
+    fases = _sin_tramos(fases, tramos_excluidos)
 
     partes = []
     no_evaluados = []
 
-    parte, msgs = _detectar_desconectado(lineas, fases, criterios)
+    parte, msgs = _detectar_desconectado(lineas, fases, criterios, tramos_excluidos)
     if not parte.empty:
         partes.append(parte)
     no_evaluados.extend(msgs)
@@ -1186,6 +1230,7 @@ def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFram
     resultado.attrs["patrones_no_evaluados"] = no_evaluados
     resultado.attrs["candidatos_fusion"] = candidatos
     resultado.attrs["criterios"] = criterios
+    resultado.attrs["tramos_excluidos"] = tramos_excluidos
     return resultado
 
 

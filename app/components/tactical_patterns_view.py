@@ -45,7 +45,7 @@ from src.analysis.tactical_patterns import (
 from src.analysis.lados import control_entre_tiempos
 from src.db import revision_patrones_repo as revisiones
 from components.sesion import puede, usuario_actual
-from components.tagging import format_time
+from components.tagging import format_time, get_events
 from theme import TEAM_COLORS, TEAM_LABELS
 
 # Nombres amigables para los patrones
@@ -57,31 +57,44 @@ PATRON_TITULOS = {
 }
 
 
-def _calcular(df: pd.DataFrame, criterios: dict) -> tuple[pd.DataFrame, list[str], list[str]]:
+def _pelotas_paradas(match_name: str | None) -> tuple:
+    """Segundos de los eventos "Pelota parada" tagueados en este video (por
+    nombre, sin importar mayúsculas: los tipos de evento son configurables).
+    Es lo que usa la excepción por pelota parada, no la detección de pelota."""
+    if not match_name:
+        return ()
+    eventos = get_events(match_name)
+    if eventos.empty:
+        return ()
+    es_pp = eventos["tag_type"].fillna("").str.strip().str.lower() == "pelota parada"
+    return tuple(sorted(float(t) for t in eventos.loc[es_pp, "time_sec"]))
+
+
+def _calcular(df: pd.DataFrame, criterios: dict, pelotas_paradas: tuple = ()) -> tuple[pd.DataFrame, list[str], list[str]]:
     if "team" not in df.columns or df["team"].dropna().empty:
         return pd.DataFrame(), [], ["Falta la columna 'team' en el archivo."]
     try:
         fases = detectar_fases(df, umbral_avance_ms=criterios["umbral_avance_ms"])
         lineas = asignar_lineas(df)
-        patrones = detectar_patrones(df, fases, lineas, criterios=criterios)
+        patrones = detectar_patrones(df, fases, lineas, criterios=criterios, pelotas_paradas=pelotas_paradas)
         return patrones, patrones.attrs.get("patrones_no_evaluados", []), patrones.attrs.get("avisos", [])
     except Exception as e:
         return pd.DataFrame(), [], [f"Error al calcular patrones: {str(e)}"]
 
 
 @st.cache_data(show_spinner="Analizando patrones tácticos en el partido…")
-def _calcular_patrones_cached(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str]]:
+def _calcular_patrones_cached(df: pd.DataFrame, pelotas_paradas: tuple = ()) -> tuple[pd.DataFrame, list[str], list[str]]:
     """
     Ejecuta el pipeline de 3 pasos (fases -> líneas -> patrones) con los
     criterios vigentes. Devuelve (patrones_df, patrones_no_evaluados, avisos).
     """
-    return _calcular(df, criterios_completos())
+    return _calcular(df, criterios_completos(), pelotas_paradas)
 
 
 @st.cache_data(show_spinner="Recalculando con los criterios de prueba…", max_entries=12)
-def _calcular_con_criterios(df: pd.DataFrame, criterios: tuple) -> tuple[pd.DataFrame, list[str], list[str]]:
+def _calcular_con_criterios(df: pd.DataFrame, criterios: tuple, pelotas_paradas: tuple = ()) -> tuple[pd.DataFrame, list[str], list[str]]:
     """Lo mismo con otros criterios (tupla de pares, para poder cachear)."""
-    return _calcular(df, criterios_completos(dict(criterios)))
+    return _calcular(df, criterios_completos(dict(criterios)), pelotas_paradas)
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -271,6 +284,12 @@ _PERILLAS = {
          "A partir de qué velocidad de avance del centro del bloque se considera que el equipo sube.",
          0.1, 1.0, 0.05, lambda v: float(v), float),
     ],
+    "Excepciones": [
+        ("ventana_pelota_parada_seg", "Segundos después de cada «Pelota parada» tagueada que no cuentan",
+         "Usa los tags «Pelota parada» del analista, no la detección de pelota. El tag ya se guarda 10 s antes "
+         "de apretar el botón, así que 30 cubre hasta 20 s después de apretarlo. 0 = no se excluye nada.",
+         0, 60, 5, lambda v: int(round(v)), float),
+    ],
 }
 
 
@@ -289,8 +308,11 @@ def _render_probar_criterios(df: pd.DataFrame, match_name: str, patrones: pd.Dat
         st.caption("Recalcula este partido con otros umbrales y muestra qué momentos aparecerían o desaparecerían, "
                    "y qué había dicho el cuerpo técnico de cada uno. **No guarda nada ni cambia lo que ven los demás.** "
                    "Los momentos nuevos se pueden calificar acá mismo, para juntar evidencia antes de cambiar un criterio.")
-        if _clave_perilla("umbral_desconexion") not in st.session_state:
+        if any(_clave_perilla(n) not in st.session_state for g in _PERILLAS.values() for n, *_ in g):
             _restablecer_perillas()
+        pelotas_paradas = _pelotas_paradas(match_name)
+        st.caption(f"En este video hay **{len(pelotas_paradas)}** «Pelota parada» tagueadas"
+                   + (" (sin tags, la excepción no tiene efecto)." if not pelotas_paradas else "."))
         with st.form("probar_criterios", border=False):
             prueba = {}
             for titulo, grupo in _PERILLAS.items():
@@ -311,7 +333,7 @@ def _render_probar_criterios(df: pd.DataFrame, match_name: str, patrones: pd.Dat
         if not cambiados:
             st.info("Son los criterios actuales: el resultado es el de arriba.")
             return
-        nuevos, _no_eval, _avisos = _calcular_con_criterios(df, st.session_state["_criterios_probados"])
+        nuevos, _no_eval, _avisos = _calcular_con_criterios(df, st.session_state["_criterios_probados"], pelotas_paradas)
         actuales = set(zip(patrones["patron"], patrones["track_id"])) if not patrones.empty else set()
         probados = set(zip(nuevos["patron"], nuevos["track_id"])) if not nuevos.empty else set()
         st.markdown(f"**Con estos criterios: {len(probados)} momentos** (hoy {len(actuales)}) · "
@@ -371,7 +393,7 @@ def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
         else:
             st.warning(texto)
 
-    patrones, no_evaluados, avisos = _calcular_patrones_cached(df)
+    patrones, no_evaluados, avisos = _calcular_patrones_cached(df, _pelotas_paradas(match_name))
     criterios_vigentes = patrones.attrs.get("criterios") or criterios_completos()
     vigentes = revisiones.vigentes(match_name) if match_name else {}
 

@@ -728,6 +728,40 @@ También se probó en el navegador (pantalla de ingreso, menú del usuario y vis
 - **En el navegador:** la tarjeta con la calificación y el comentario, y el panel de perillas.
 - Los AppTest de siempre, sin excepciones.
 
+**Primeras calificaciones (Santi, 27–28/10/2026, `sportivo_crop3`):** 15 momentos de `desconectado`, todos con criterios de prueba (30% más despegado, 50% del tiempo, 2 m). Quedaron 4 útiles, 9 correctos tácticamente y 2 que no se ven. El momento vigente (track 2374) quedó sin calificar.
+- **"Cuánto más despegado" no separa:** mediana 1.8× en los útiles y 1.9× en los correctos. Es lo mismo que ya mostraba la severidad.
+- **"Qué parte del tiempo" sí separa.** Solo moviendo esa perilla:
+
+| Proporción mínima | Momentos | Útil / correcto / no se ve / sin calificar |
+|---|---|---|
+| 50% | 9 | 3 / 4 / 1 / 1 |
+| 55% | 8 | 3 / 3 / 1 / 1 |
+| 60% | 4 | 2 / 0 / 1 / 1 |
+| 65% | 2 | 1 / 0 / 0 / 1 |
+| 70% (vigente) | 1 | 0 / 0 / 0 / 1 |
+
+  **No se cambia todavía:** son 15 casos de un partido, calificados por Santi y no por el DT. La regla es recalibrar con varios casos.
+- **4 de los 6 momentos no útiles no son un problema de criterio:**
+  - 2 pelotas paradas, que coinciden con tags "Pelota parada";
+  - 1 equipo mal asignado (track 2643);
+  - 1 arquero que el detector vio como arquero solo en el 18% de los cuadros (track 2774), así que el filtro de arqueros (más de la mitad) no lo sacó.
+
+**Excepción por pelota parada (28/10/2026): probada, no ayuda con estos datos.**
+- **Qué es:** criterio `ventana_pelota_parada_seg` (por defecto 0, no excluye nada) y parámetro `pelotas_paradas` de `detectar_patrones`.
+  - Saca de líneas y fases los segundos que siguen a cada tag "Pelota parada" del analista, y los descuenta del tiempo en cancha.
+  - **Usa los tags, no la detección de pelota,** que tiene recall bajo.
+  - Es una perilla más en "Probar otros criterios".
+- **Con la ventana en 0,** el resultado es idéntico al anterior en los dos partidos.
+- **Efecto con los criterios de prueba,** frente a las calificaciones:
+  - con 15 s salen los dos de pelota parada (674, 774), pero también el **140, que era útil**;
+  - con 30 s sale además el **742, útil**. En esa misma pelota parada el 774 era "correcto" y el 742 "útil";
+  - la proporción de útiles baja: 27% sin excepción, 25% con 15 s, 20% con 30 s.
+- **Por qué no sirve:**
+  - **Saca de más.** Sacar tiempo cambia el denominador de todos los jugadores que estaban en cancha en ese momento, no solo de los que estaban en la jugada.
+  - **Agrega momentos.** Con los criterios vigentes más 30 s aparece el 638.
+  - **Una pelota parada no hace "correcto" todo lo que pasa en ella.**
+- **Queda la perilla para probar con más partidos,** pero no se recomienda activarla. La alternativa propuesta es no excluir nada y avisar en la tarjeta cuando un momento coincide con una pelota parada tagueada, para que lo juzgue el DT.
+
 **Uso esperado:**
 1. El club revisa y califica los momentos de varios partidos.
 2. Con "Probar otros criterios" se mira qué umbral separa lo "útil" de lo "correcto tácticamente".
