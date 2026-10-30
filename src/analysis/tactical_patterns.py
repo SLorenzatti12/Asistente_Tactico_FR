@@ -274,6 +274,14 @@ SEGMENTO_ATAQUE_MIN_SEG = 1.0
 # esa fase, su desplazamiento medido no significa nada).
 MIN_FRAMES_EN_FASE = 3
 
+# Un compañero entra en la comparación solo si cubre al menos esta parte del
+# intervalo en que se midió al jugador. El jugador y sus compañeros se miden
+# sobre el mismo intervalo: el track 1394 de sportivo_t2 aparecía en el último
+# segundo de una subida de 11.7 s, y se lo comparaba contra lo que sus
+# compañeros avanzaron en toda la subida (ver decisiones.md, "Error de medición
+# en no_achica").
+MIN_COBERTURA_PAR_EN_FASE = 0.8
+
 # Déficit mínimo (metros, respecto al desplazamiento de su línea) durante
 # una fase de ataque para contarla como ocurrencia de no_achica.
 UMBRAL_NO_ACHICA_M = 3.0
@@ -908,27 +916,34 @@ def _detectar_no_achica(lineas: pd.DataFrame, fases: pd.DataFrame, criterios: di
             if ventana.empty:
                 continue
 
-            desplazamiento = {}
+            tracks_en_fase = {}
             for track_id, sub in ventana.groupby("track_id"):
-                if len(sub) < MIN_FRAMES_EN_FASE:
-                    continue
-                sub = sub.sort_values("frame")
-                dx = (sub["field_x"].iloc[-1] - sub["field_x"].iloc[0]) * direccion[team]
-                desplazamiento[track_id] = dx
+                if len(sub) >= MIN_FRAMES_EN_FASE:
+                    tracks_en_fase[track_id] = sub.sort_values("frame")
 
-            for track_id, dx_jugador in desplazamiento.items():
+            for track_id, sub in tracks_en_fase.items():
                 linea = linea_por_track.get(track_id)
-                pares_linea = [
-                    dx for tid, dx in desplazamiento.items()
-                    if tid != track_id and linea_por_track.get(tid) == linea
-                ]
+                # El intervalo es el del track, no el de la subida: si apareció
+                # a mitad de camino, solo se compara lo que se pudo medir de él.
+                t_desde, t_hasta = sub["time_sec"].iloc[0], sub["time_sec"].iloc[-1]
+                dx_jugador = (sub["field_x"].iloc[-1] - sub["field_x"].iloc[0]) * direccion[team]
+                pares_linea = []
+                for tid, sub_par in tracks_en_fase.items():
+                    if tid == track_id or linea_por_track.get(tid) != linea:
+                        continue
+                    par = sub_par[(sub_par["time_sec"] >= t_desde) & (sub_par["time_sec"] <= t_hasta)]
+                    if len(par) < MIN_FRAMES_EN_FASE:
+                        continue
+                    if par["time_sec"].iloc[-1] - par["time_sec"].iloc[0] < MIN_COBERTURA_PAR_EN_FASE * (t_hasta - t_desde):
+                        continue
+                    pares_linea.append((par["field_x"].iloc[-1] - par["field_x"].iloc[0]) * direccion[team])
                 if len(pares_linea) < MIN_JUGADORES_LINEA_COMPARACION:
                     continue
                 fases_evaluadas_por_track[track_id] = fases_evaluadas_por_track.get(track_id, 0) + 1
                 dx_linea_prom = float(np.mean(pares_linea))
                 deficit = dx_linea_prom - dx_jugador
                 if deficit > umbral_m:
-                    deficit_por_track.setdefault(track_id, []).append((t_ini, t_fin, deficit))
+                    deficit_por_track.setdefault(track_id, []).append((t_desde, t_hasta, deficit))
 
         for track_id, ocurrencias in deficit_por_track.items():
             if not ocurrencias:

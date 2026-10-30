@@ -927,7 +927,7 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
 | 2° tiempo | 3: `desconectado` #82 (0:43) y **`no_achica` #696 (5:31) y #1394 (12:02)** | 9 | 24 |
 
 - Son los **primeros "no achica" con datos reales**. En el 1° tiempo no hubo 4 subidas evaluables por jugador.
-- Calificados el 28/10/2026 (ver abajo).
+- Calificados el 28/10/2026 (ver abajo). **Esta tabla es de antes de corregir `no_achica` (30/10/2026):** con los criterios vigentes ahora son 2 momentos en cada tiempo (1°: `desconectado` #2374 y `no_achica` #931; 2°: `desconectado` #82 y `no_achica` #2158).
 
 **Verificado en el dashboard (AppTest):** el partido aparece agrupado con sus dos tiempos, y las cuatro vistas abren sin errores en el 2° tiempo. Patrones muestra los 3 momentos y "los equipos cambiaron de lado". El Semáforo usa una sola planilla para el partido.
 
@@ -950,12 +950,13 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
   - **No detecta el juego detenido:** los momentos comentados así tienen el mismo ritmo que el resto de los correctos (2,32 y 2,36 m/s). Lo que muestra es que los útiles pasan cuando el juego va rápido.
   - **Límites:** el 1,15 se eligió mirando estos mismos datos, y es un solo partido calificado por Santi, no por el DT. No se implementa.
 
-**Error de medición en `no_achica` (encontrado por el comentario de Santi sobre el #1394, "no se encuentra"; sin corregir, a la espera de decisión):**
-- **Qué pasa:** el desplazamiento del jugador se mide en la parte de la subida en que su track existe, y el de sus compañeros en toda la subida. Un track que aparece al final queda "atrás" porque se midió menos tiempo, no porque haya corrido menos.
-- **Además, los tramos de evidencia son la subida del equipo, no la vida del track.** Por eso el salto puede llevar a un momento en que el jugador todavía no está.
-- **#1394:** el primer tramo es 12:02,5–12:14,2 y el track recién aparece en 12:13: 1 s medido contra 11,7 s de sus compañeros. Pasa con 10,7 de los 17,3 s de su evidencia. Revisado en el video anotado: a las 12:08 no está, y a las 12:24 y 12:34 se ve con su número.
-- **#696:** el primer tramo es 5:31,2–5:37,7 y el track aparece en 5:34,6.
-- **Efecto medido, comparando con los compañeros sobre el mismo intervalo** (sin cambiar umbrales; script aparte, el código no se tocó):
+**Error de medición en `no_achica` (encontrado por el comentario de Santi sobre el #1394, "no se encuentra"; corregido el 30/10/2026, con su OK):**
+- **Qué pasaba:** el desplazamiento del jugador se mide en la parte de la subida en que su track existe, y el de sus compañeros en toda la subida. Un track que aparece al final queda "atrás" porque se midió menos tiempo, no porque haya corrido menos.
+- **Además, los tramos de evidencia eran la subida del equipo, no la vida del track.** Por eso el salto podía llevar a un momento en que el jugador todavía no estaba.
+- **#1394:** el primer tramo era 12:02,5–12:14,2 y el track recién aparece en 12:13: 1 s medido contra 11,7 s de sus compañeros. Le pasaba con 10,7 de los 17,3 s de su evidencia. Revisado en el video anotado: a las 12:08 no está, y a las 12:24 y 12:34 se ve con su número.
+- **#696:** el primer tramo era 5:31,2–5:37,7 y el track aparece en 5:34,6.
+- **Corrección (`_detectar_no_achica`):** el jugador y sus compañeros se miden sobre el mismo intervalo, el del track dentro de la subida, y ese intervalo es el tramo de evidencia. Un compañero entra en la comparación solo si cubre al menos el 80% de ese intervalo (`MIN_COBERTURA_PAR_EN_FASE`). Los umbrales y criterios no cambiaron.
+- **Efecto** (verificado con el código ya corregido, igual a lo medido antes en un script aparte):
 
 | Tiempo y criterios | Hoy | Sobre el mismo intervalo |
 |---|---|---|
@@ -964,7 +965,16 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
 | 2° · vigentes | #696 correcto, #1394 no se ve | #2158 (sin calificar) |
 | 2° · prueba | #696, #1394, #816 útil | #816 útil, #2158 (sin calificar) |
 
-  Salen los dos que no servían y queda el útil, pero son pocos casos, y los dos nuevos (#931 desde 7:28, #2158 desde 20:59) todavía no se miraron.
+  Salen los dos que no servían y queda el útil, pero son pocos casos. Las calificaciones de #696 y #1394 quedan guardadas, aunque esos momentos ya no aparezcan.
+- **Los dos momentos nuevos, todavía sin calificar:**
+  - **#931** (1° tiempo, desde 7:28): 58,6 s, todas las filas como jugador, 3 de 5 subidas, 4,9 m.
+  - **#2158** (2° tiempo, desde 20:59): 3 de 4 subidas, 7,0 m. **Muy probablemente es el arquero de Crecer adelantado:** el 39% de sus filas son `goalkeeper` y termina en el área propia (`field_x` ≈ 5, por el centro). No llega a más de la mitad, así que el filtro de arqueros no lo saca, igual que el track 2774. No se cambió ese filtro.
+- **Verificado:**
+  - en los cuatro videos con equipos, con los dos juegos de criterios, `desconectado` y los "no evaluados" dan igual que antes; lo único que cambia es el orden entre empates de severidad;
+  - toda la evidencia de `no_achica` cae dentro de la vida de su track;
+  - AppTest: la vista Patrones abre sin errores en los dos tiempos, con 2 momentos en cada uno;
+  - en el video anotado, #2158 y #931 se ven con su número en su primer tramo.
+- **Tiempo:** ~1,5 s más por tiempo del partido (de 21,8 a 23 s y de 29 a 30,8 s).
 
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
