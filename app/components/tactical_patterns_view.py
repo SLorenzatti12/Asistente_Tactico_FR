@@ -223,6 +223,53 @@ def _render_revision(match_name: str, row: pd.Series, criterios: dict, previa: d
         st.caption(f"Última revisión: {previa['created_by'] or 'sin dato'} · {previa['created_at'][:16].replace('T', ' ')}")
 
 
+def _guardar_tramo(match_name: str, patron: str, track_id: int, t_ini: float, t_fin: float,
+                   criterios: dict, clave: str) -> None:
+    """Callback de la calificación de un tramo (la tabla solo agrega filas)."""
+    usuario = usuario_actual()
+    if usuario is None or not puede("revisar_patrones"):
+        return
+    revisiones.guardar_tramo(match_name, patron, track_id, t_ini, t_fin,
+                             st.session_state.get(clave), criterios, usuario["usuario"])
+
+
+def _render_tramos(match_name: str | None, row: pd.Series, criterios: dict, prefijo: str) -> None:
+    """Evidencia del momento: una fila por tramo, con el botón que lleva a la
+    Mesa táctica y su calificación, porque en un mismo momento puede haber
+    tramos que son un error y otros que no."""
+    evidencia = row.get("evidencia_seg", [])[:6]
+    if not len(evidencia):
+        return
+    patron, track_id = row["patron"], row["track_id"]
+    previas = revisiones.tramos_vigentes(match_name) if match_name else {}
+    califica = match_name is not None and puede("revisar_patrones")
+    st.html('<div class="at-card-ev">Evidencia en video</div>')
+    if califica:
+        st.caption("Si no todos los tramos son iguales, podés calificarlos por separado: "
+                   "👍 útil · ✅ correcto tácticamente · 🚫 no se ve.")
+    for j, (t_ini, t_fin) in enumerate(evidencia):
+        previa = previas.get(revisiones.clave_tramo(patron, track_id, t_ini))
+        with st.container(horizontal=True, gap="small", vertical_alignment="center"):
+            st.button(
+                format_time(t_ini), key=f"{prefijo}btn_seek_{patron}_{track_id}_{j}",
+                icon=":material/play_arrow:", type="primary" if j == 0 else "secondary",
+                on_click=_ir_a, args=(t_ini,),
+                help="Ver la jugada en la Mesa táctica (video y cancha).",
+            )
+            if califica:
+                clave = f"{prefijo}rev_tramo_{patron}_{track_id}_{int(round(t_ini * 10))}"
+                if clave not in st.session_state:
+                    st.session_state[clave] = previa["veredicto"] if previa else None
+                st.segmented_control(
+                    f"Calificación del tramo {format_time(t_ini)}", list(revisiones.VEREDICTOS),
+                    format_func=lambda v: _ICONO_VEREDICTO[v], key=clave, label_visibility="collapsed",
+                    on_change=_guardar_tramo,
+                    args=(match_name, patron, track_id, t_ini, t_fin, criterios, clave))
+            elif previa and previa["veredicto"]:
+                st.caption(f"{_ICONO_VEREDICTO[previa['veredicto']]} {revisiones.VEREDICTOS[previa['veredicto']]}"
+                           f" · {previa['created_by'] or 'sin dato'}")
+
+
 def _resumen_revisiones(patrones: pd.DataFrame, vigentes: dict) -> str:
     calificados = [vigentes[k]["veredicto"] for k in zip(patrones["patron"], patrones["track_id"])
                    if k in vigentes and vigentes[k]["veredicto"]]
@@ -246,6 +293,15 @@ def _render_lo_que_dijo_el_club() -> None:
             **{revisiones.VEREDICTOS[v]: c[v] for v in revisiones.VEREDICTOS},
             "% útil": f"{100 * c['util'] / sum(c.values()):.0f}%",
         } for p, c in resumen.items()]), hide_index=True, width="stretch")
+        por_tramo = revisiones.resumen_tramos_por_patron()
+        if por_tramo:
+            st.markdown("**Por tramo**")
+            st.dataframe(pd.DataFrame([{
+                "Patrón": PATRON_TITULOS.get(p, p),
+                "Calificados": sum(c.values()),
+                **{revisiones.VEREDICTOS[v]: c[v] for v in revisiones.VEREDICTOS},
+                "% útil": f"{100 * c['util'] / sum(c.values()):.0f}%",
+            } for p, c in por_tramo.items()]), hide_index=True, width="stretch")
         comentarios = revisiones.con_comentario(limite=30)
         if comentarios:
             st.markdown("**Comentarios**")
@@ -357,11 +413,12 @@ def _render_probar_criterios(df: pd.DataFrame, match_name: str, patrones: pd.Dat
                 c_txt.markdown(f"**{estado}** · {PATRON_TITULOS.get(row['patron'], row['patron'])} · track {row['track_id']} · "
                                f"{TEAM_LABELS.get(row['team'], row['team'])} · {opinion(clave)}")
                 evidencia = row.get("evidencia_seg", [])
-                if len(evidencia):
+                if estado == "NUEVO":
+                    _render_tramos(match_name, row, criterios_prueba, prefijo="prueba_")
+                    _render_revision(match_name, row, criterios_prueba, vigentes.get(clave), prefijo="prueba_")
+                elif len(evidencia):
                     c_ir.button(format_time(evidencia[0][0]), key=f"prueba_ir_{row['patron']}_{row['track_id']}",
                                 icon=":material/play_arrow:", on_click=_ir_a, args=(evidencia[0][0],), width="stretch")
-                if estado == "NUEVO":
-                    _render_revision(match_name, row, criterios_prueba, vigentes.get(clave), prefijo="prueba_")
 
 
 def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
@@ -451,17 +508,7 @@ def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
                 st.html(_html_tarjeta(row, PATRON_TITULOS.get(row["patron"], row["patron"]),
                                       TEAM_LABELS.get(team_key, team_key), TEAM_COLORS.get(team_key, "#ffffff")))
                 # Evidencia: cada botón lleva a la Mesa táctica en ese instante
-                evidencia = row.get("evidencia_seg", [])[:6]
-                if evidencia:
-                    st.html('<div class="at-card-ev">Evidencia en video</div>')
-                    with st.container(horizontal=True, gap="small"):
-                        for j, (t_ini, _t_fin) in enumerate(evidencia):
-                            st.button(
-                                format_time(t_ini), key=f"btn_seek_{clave}_{j}",
-                                icon=":material/play_arrow:", type="primary" if j == 0 else "secondary",
-                                on_click=_ir_a, args=(t_ini,),
-                                help="Ver la jugada en la Mesa táctica (video y cancha).",
-                            )
+                _render_tramos(match_name, row, criterios_vigentes, prefijo="")
                 if match_name:
                     _render_revision(match_name, row, criterios_vigentes,
                                      vigentes.get((row["patron"], row["track_id"])), prefijo="")

@@ -927,7 +927,7 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
 | 2° tiempo | 3: `desconectado` #82 (0:43) y **`no_achica` #696 (5:31) y #1394 (12:02)** | 9 | 24 |
 
 - Son los **primeros "no achica" con datos reales**. En el 1° tiempo no hubo 4 subidas evaluables por jugador.
-- Calificados el 28/10/2026 (ver abajo). **Esta tabla es de antes de corregir `no_achica` (30/10/2026):** con los criterios vigentes ahora son 2 momentos en cada tiempo (1°: `desconectado` #2374 y `no_achica` #931; 2°: `desconectado` #82 y `no_achica` #2158).
+- Calificados el 28/10/2026 (ver abajo). **Esta tabla es de antes de corregir `no_achica` y de filtrar arqueros (30/10/2026):** con los criterios vigentes ahora son 2 momentos en el 1° tiempo (`desconectado` #2374 y `no_achica` #931) y 1 en el 2° (`desconectado` #82).
 
 **Verificado en el dashboard (AppTest):** el partido aparece agrupado con sus dos tiempos, y las cuatro vistas abren sin errores en el 2° tiempo. Patrones muestra los 3 momentos y "los equipos cambiaron de lado". El Semáforo usa una sola planilla para el partido.
 
@@ -968,15 +968,23 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
   Salen los dos que no servían y queda el útil, pero son pocos casos. Las calificaciones de #696 y #1394 quedan guardadas, aunque esos momentos ya no aparezcan.
 - **Los dos momentos nuevos, todavía sin calificar:**
   - **#931** (1° tiempo, desde 7:28): 58,6 s, todas las filas como jugador, 3 de 5 subidas, 4,9 m.
-  - **#2158** (2° tiempo, desde 20:59): 3 de 4 subidas, 7,0 m. Ver la calificación de abajo.
+  - **#2158** (2° tiempo, desde 20:59): 3 de 4 subidas, 7,0 m. Es un arquero: ya no se muestra (ver abajo).
 - **Calificación de los dos (Santi, 30/10/2026):**
   - **#931, correcto.** Es el delantero local: lejos de la jugada, pero en una posición correcta. Santi aclara que a veces, en esa misma situación, sí es un error. Un momento tiene varios tramos y se califica entero, así que esa mezcla no queda registrada.
-  - **#2158, no se ve: es el arquero**, de azul oscuro. El 39% de sus filas son `goalkeeper`, y el filtro de arqueros pide más de la mitad.
-  - **Sin resolver: de qué equipo es.** Santi dice que es el visitante y el color lo marca así, pero termina en el arco izquierdo, que en este tiempo el sistema le adjudica al local (arqueros claros de ese lado: 4 local, 0 visitante). Si es del local, el error de equipo alcanza a todos los fragmentos de ese arquero con menos de la mitad de filas `goalkeeper`: 7 tracks de 30 s o más marcados visitantes, uno de 296 s.
-- **Qué hacer con los arqueros (medido, sin aplicar):**
+  - **#2158, no se ve: es el arquero**, de azul oscuro. El 40% de sus filas son `goalkeeper`, y el filtro de arqueros pide más de la mitad.
+- **El arquero de azul oscuro es de Sportivo (Santi, 30/10/2026), así que el lado que asigna el sistema está bien y el que falla es el color.** Su camiseta se parece a la de Crecer, y el color manda en los tracks con menos de la mitad de filas `goalkeeper`.
+  - **Tracks de 30 s o más, cerca del arco de Sportivo, con 10–50% de filas de arquero y marcados visitantes:** 7 en el 2° tiempo (uno de 296 s) y 5 en el 1°. No se revisaron uno por uno.
+  - **Sigue sin corregir:** esas filas cuentan para el equipo equivocado en la vista Jugadores y en las líneas de referencia de los patrones.
+- **Qué hacer con los arqueros:**
   - **Bajar `PROPORCION_MIN_ARQUERO` no sirve:** ese corte también define quién entra en las líneas de referencia. Al 15% saca a #2158, pero con los criterios vigentes aparecen #1054 y #1822, y con los de prueba se pierde el #1547, que era útil. Al 10% se pierde además el #2903.
-  - **No reportar el momento si el track tiene más de 10% de filas `goalkeeper`, sin tocar las líneas:** de los 40 momentos con criterios de prueba, saca solo a #2158 y #2774, los dos arqueros. El siguiente tiene 2%.
+  - **Aplicado (30/10/2026, decisión de Santi): no se reporta el momento si el track tiene más de 10% de filas `goalkeeper`** (`PROPORCION_MAX_ARQUERO_EN_MOMENTO`), sin tocar las líneas. De los 40 momentos con criterios de prueba, saca solo a #2158 y #2774, los dos arqueros; el siguiente tiene 2%. Los demás momentos dan idéntico fila por fila, en los cuatro videos con equipos. Lo que sale queda dicho en "Patrones no evaluados".
 - **Por línea** (`desconectado`, criterios de prueba; útil / correcto / no se ve): ataque 7 / 11 / 2, defensa 1 / 8 / 0, mediocampo 1 / 5 / 1. El patrón sirve más en los delanteros, pero ahí también se mezcla más: sin saber dónde está la pelota, el sistema no distingue si un delantero lejos está mal ubicado o bien.
+- **Calificación por tramo (30/10/2026, decisión de Santi):** por lo que mostró el #931, cada tramo de un momento se puede calificar aparte.
+  - **En la tarjeta:** junto al botón de cada tramo, 👍 ✅ 🚫. Es opcional y no reemplaza la calificación del momento ni su comentario. También está en los momentos nuevos de "Probar otros criterios". Se califican los tramos que muestra la tarjeta: los primeros 6.
+  - **Datos:** tabla `patrones_revision_tramos`, que solo agrega filas: vale la última y queda el historial. Guarda el comienzo y el fin del tramo, el criterio con que apareció y quién calificó. Solo local, no se sincroniza.
+  - **Acumulado:** "Lo que dijo el cuerpo técnico" suma una tabla "Por tramo". Quien no puede revisar ve la calificación sin poder cambiarla.
+  - **Límite:** el tramo se identifica por su comienzo. Si otro criterio o un reproceso lo corre, cuenta como otro tramo.
+  - **Verificado:** con AppTest sobre una copia de la base, calificar, corregir y sacar la calificación, que el momento no cambie, recuperarla en otra sesión, el lector sin controles y los momentos nuevos de la prueba. En el navegador, sobre otra copia, la tarjeta y un clic que guarda el tramo con su usuario; la base real no se tocó.
 - **Verificado:**
   - en los cuatro videos con equipos, con los dos juegos de criterios, `desconectado` y los "no evaluados" dan igual que antes; lo único que cambia es el orden entre empates de severidad;
   - toda la evidencia de `no_achica` cae dentro de la vida de su track;

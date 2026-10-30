@@ -289,6 +289,16 @@ UMBRAL_NO_ACHICA_M = 3.0
 # Déficit promedio (metros) que se mapea a severidad máxima.
 UMBRAL_SEVERIDAD_MAX_NO_ACHICA_M = 8.0
 
+# ── A quién no se le reporta nada ─────────────────────────────
+# Un track con más de esta parte de sus filas como `goalkeeper` no genera
+# momentos para revisar, aunque no llegue a la mitad que pide tracks_arquero().
+# En Sportivo-Crecer, los momentos sobre los arqueros reales 2774 (18%) y 2158
+# (40%) salían porque el detector los ve como `player` buena parte del tiempo;
+# el siguiente momento tiene 2%. Solo decide qué se muestra: bajar el corte de
+# tracks_arquero() cambia también quién entra en las líneas de referencia, y
+# con eso la medición de otros jugadores (ver decisiones.md).
+PROPORCION_MAX_ARQUERO_EN_MOMENTO = 0.10
+
 # ── Criterios ajustables (27/10/2026) ─────────────────────────
 # Los seis umbrales que deciden QUÉ cuenta como patrón (no CÓMO se mide).
 # Son los únicos que tiene sentido que ajuste el club: el resto de las
@@ -1144,6 +1154,20 @@ def agrupar_candidatos_fusion(candidatos: pd.DataFrame, tracks) -> dict[int, lis
     return grupos
 
 
+def _sin_tracks_de_arquero(patrones: pd.DataFrame, df: pd.DataFrame) -> tuple:
+    """Saca los momentos de tracks con filas `goalkeeper` por encima de
+    PROPORCION_MAX_ARQUERO_EN_MOMENTO, y dice cuáles salieron."""
+    personas = df[df["class_name"].isin(("player", "goalkeeper"))]
+    fraccion = (personas["class_name"] == "goalkeeper").groupby(personas["track_id"]).mean()
+    es_arquero = patrones["track_id"].map(fraccion).fillna(0) > PROPORCION_MAX_ARQUERO_EN_MOMENTO
+    mensajes = [
+        f"{fila.patron}: el track {fila.track_id} no se muestra porque el "
+        f"{fraccion[fila.track_id]:.0%} de sus filas son de arquero."
+        for fila in patrones[es_arquero].itertuples(index=False)
+    ]
+    return patrones[~es_arquero].reset_index(drop=True), mensajes
+
+
 def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFrame,
                       criterios: dict | None = None, pelotas_paradas=None) -> pd.DataFrame:
     """
@@ -1227,6 +1251,8 @@ def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFram
         resultado = pd.DataFrame(columns=columnas_salida)
     else:
         resultado = pd.concat(partes, ignore_index=True)
+        resultado, msgs = _sin_tracks_de_arquero(resultado, df)
+        no_evaluados.extend(msgs)
         resultado["posible_mismo_jugador_que"] = resultado["track_id"].map(
             lambda tid: sorted(relacionados.get(tid, []))
         )
