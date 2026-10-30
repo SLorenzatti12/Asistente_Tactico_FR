@@ -968,7 +968,15 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
   Salen los dos que no servían y queda el útil, pero son pocos casos. Las calificaciones de #696 y #1394 quedan guardadas, aunque esos momentos ya no aparezcan.
 - **Los dos momentos nuevos, todavía sin calificar:**
   - **#931** (1° tiempo, desde 7:28): 58,6 s, todas las filas como jugador, 3 de 5 subidas, 4,9 m.
-  - **#2158** (2° tiempo, desde 20:59): 3 de 4 subidas, 7,0 m. **Muy probablemente es el arquero de Crecer adelantado:** el 39% de sus filas son `goalkeeper` y termina en el área propia (`field_x` ≈ 5, por el centro). No llega a más de la mitad, así que el filtro de arqueros no lo saca, igual que el track 2774. No se cambió ese filtro.
+  - **#2158** (2° tiempo, desde 20:59): 3 de 4 subidas, 7,0 m. Ver la calificación de abajo.
+- **Calificación de los dos (Santi, 30/10/2026):**
+  - **#931, correcto.** Es el delantero local: lejos de la jugada, pero en una posición correcta. Santi aclara que a veces, en esa misma situación, sí es un error. Un momento tiene varios tramos y se califica entero, así que esa mezcla no queda registrada.
+  - **#2158, no se ve: es el arquero**, de azul oscuro. El 39% de sus filas son `goalkeeper`, y el filtro de arqueros pide más de la mitad.
+  - **Sin resolver: de qué equipo es.** Santi dice que es el visitante y el color lo marca así, pero termina en el arco izquierdo, que en este tiempo el sistema le adjudica al local (arqueros claros de ese lado: 4 local, 0 visitante). Si es del local, el error de equipo alcanza a todos los fragmentos de ese arquero con menos de la mitad de filas `goalkeeper`: 7 tracks de 30 s o más marcados visitantes, uno de 296 s.
+- **Qué hacer con los arqueros (medido, sin aplicar):**
+  - **Bajar `PROPORCION_MIN_ARQUERO` no sirve:** ese corte también define quién entra en las líneas de referencia. Al 15% saca a #2158, pero con los criterios vigentes aparecen #1054 y #1822, y con los de prueba se pierde el #1547, que era útil. Al 10% se pierde además el #2903.
+  - **No reportar el momento si el track tiene más de 10% de filas `goalkeeper`, sin tocar las líneas:** de los 40 momentos con criterios de prueba, saca solo a #2158 y #2774, los dos arqueros. El siguiente tiene 2%.
+- **Por línea** (`desconectado`, criterios de prueba; útil / correcto / no se ve): ataque 7 / 11 / 2, defensa 1 / 8 / 0, mediocampo 1 / 5 / 1. El patrón sirve más en los delanteros, pero ahí también se mezcla más: sin saber dónde está la pelota, el sistema no distingue si un delantero lejos está mal ubicado o bien.
 - **Verificado:**
   - en los cuatro videos con equipos, con los dos juegos de criterios, `desconectado` y los "no evaluados" dan igual que antes; lo único que cambia es el orden entre empates de severidad;
   - toda la evidencia de `no_achica` cae dentro de la vida de su track;
