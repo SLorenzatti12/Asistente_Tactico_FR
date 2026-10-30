@@ -927,9 +927,44 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
 | 2° tiempo | 3: `desconectado` #82 (0:43) y **`no_achica` #696 (5:31) y #1394 (12:02)** | 9 | 24 |
 
 - Son los **primeros "no achica" con datos reales**. En el 1° tiempo no hubo 4 subidas evaluables por jugador.
-- Todavía sin calificar.
+- Calificados el 28/10/2026 (ver abajo).
 
 **Verificado en el dashboard (AppTest):** el partido aparece agrupado con sus dos tiempos, y las cuatro vistas abren sin errores en el 2° tiempo. Patrones muestra los 3 momentos y "los equipos cambiaron de lado". El Semáforo usa una sola planilla para el partido.
+
+**Calificaciones del 2° tiempo (Santi, 28/10/2026):** los 24 momentos, con los mismos criterios de prueba que el 1° (30% más despegado, 50% del tiempo, 2 m). Quedaron 6 útiles, 16 correctos tácticamente y 2 que no se ven.
+- **"Qué parte del tiempo" no se sostiene.** En el 1° tiempo parecía separar, y en el 2° no. Solo moviendo esa perilla, `desconectado` (útil / correcto / no se ve / sin calificar):
+
+| Proporción mínima | 1° tiempo | 2° tiempo | Partido |
+|---|---|---|---|
+| 50% | 3 / 4 / 1 / 1 | 4 / 10 / 0 / 0 | 7 / 14 / 1 / 1 |
+| 55% | 3 / 3 / 1 / 1 | 4 / 7 / 0 / 0 | 7 / 10 / 1 / 1 |
+| 60% | 2 / 0 / 1 / 1 | 3 / 4 / 0 / 0 | 5 / 4 / 1 / 1 |
+| 65% | 1 / 0 / 0 / 1 | 1 / 2 / 0 / 0 | 2 / 2 / 0 / 1 |
+| 70% (vigente) | 0 / 0 / 0 / 1 | 1 / 0 / 0 / 0 | 1 / 0 / 0 / 1 |
+
+  **No se propone bajar la proporción:** el 60% que parecía limpio con un tiempo mezcla útiles y correctos con los dos.
+- **El motivo más repetido es el juego detenido:** 8 de los 16 `desconectado` no útiles (lateral, tiro libre, barrera, pelota afuera, antes de reanudar). En este tiempo hay 1 solo tag, así que la excepción por tags de pelota parada no podría sacarlos.
+- **Hipótesis a medir con otro partido: el ritmo del juego.** Ritmo: mediana de la velocidad de todos los jugadores en cada segundo, suavizada 5 s, en los tramos del momento y relativa a la mediana de ese tiempo.
+  - Ordena mejor que la proporción: un útil queda por encima de un no útil el 80% de las veces, contra 65% (1° tiempo 82% y 70%; 2° tiempo 80% y 60%; `desconectado`, 36 momentos).
+  - Con ritmo ≥ 1,15 veces el normal quedan 7 momentos: 6 útiles y 1 correcto, de los 39 calificados y 10 útiles en total.
+  - **No detecta el juego detenido:** los momentos comentados así tienen el mismo ritmo que el resto de los correctos (2,32 y 2,36 m/s). Lo que muestra es que los útiles pasan cuando el juego va rápido.
+  - **Límites:** el 1,15 se eligió mirando estos mismos datos, y es un solo partido calificado por Santi, no por el DT. No se implementa.
+
+**Error de medición en `no_achica` (encontrado por el comentario de Santi sobre el #1394, "no se encuentra"; sin corregir, a la espera de decisión):**
+- **Qué pasa:** el desplazamiento del jugador se mide en la parte de la subida en que su track existe, y el de sus compañeros en toda la subida. Un track que aparece al final queda "atrás" porque se midió menos tiempo, no porque haya corrido menos.
+- **Además, los tramos de evidencia son la subida del equipo, no la vida del track.** Por eso el salto puede llevar a un momento en que el jugador todavía no está.
+- **#1394:** el primer tramo es 12:02,5–12:14,2 y el track recién aparece en 12:13: 1 s medido contra 11,7 s de sus compañeros. Pasa con 10,7 de los 17,3 s de su evidencia. Revisado en el video anotado: a las 12:08 no está, y a las 12:24 y 12:34 se ve con su número.
+- **#696:** el primer tramo es 5:31,2–5:37,7 y el track aparece en 5:34,6.
+- **Efecto medido, comparando con los compañeros sobre el mismo intervalo** (sin cambiar umbrales; script aparte, el código no se tocó):
+
+| Tiempo y criterios | Hoy | Sobre el mismo intervalo |
+|---|---|---|
+| 1° · vigentes | ninguno | #931 (sin calificar) |
+| 1° · prueba | ninguno | #931 (sin calificar) |
+| 2° · vigentes | #696 correcto, #1394 no se ve | #2158 (sin calificar) |
+| 2° · prueba | #696, #1394, #816 útil | #816 útil, #2158 (sin calificar) |
+
+  Salen los dos que no servían y queda el útil, pero son pocos casos, y los dos nuevos (#931 desde 7:28, #2158 desde 20:59) todavía no se miraron.
 
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
