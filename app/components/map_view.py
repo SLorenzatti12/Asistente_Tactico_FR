@@ -80,13 +80,9 @@ def _frame_at_time(df: pd.DataFrame, current_time: float) -> pd.DataFrame:
 
 
 def _players(frame_df: pd.DataFrame) -> pd.DataFrame:
-    """Filtra solo jugadores (excluye pelota, árbitro, etc.), y los arqueros
-    que el detector vio como `player` en ese cuadro (equipos_info["ids_arquero"]
-    del parquet): si no, el bloque se estira hasta el arco."""
+    """Filtra solo jugadores (excluye pelota, árbitro, etc.)."""
     if "class_name" in frame_df.columns:
-        jugadores = frame_df[frame_df["class_name"] == "player"]
-        ids_arquero = frame_df.attrs.get("equipos_info", {}).get("ids_arquero")
-        return jugadores[~jugadores["track_id"].isin(ids_arquero)] if ids_arquero else jugadores
+        return frame_df[frame_df["class_name"] == "player"]
     return frame_df
 
 

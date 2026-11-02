@@ -127,17 +127,6 @@ MIN_MUESTRAS_TRACK = 2        # mínimo de muestras válidas por track para conf
 # por la mitad de cancha en la que estaban y no por su camiseta.
 PROPORCION_MIN_ARQUERO = 0.5
 
-# También es arquero el track con MÁS de esta fracción de filas `goalkeeper` si
-# esas filas están a no más de MAX_DIST_FILAS_ARQUERO_M de su posición habitual.
-# El arquero de Sportivo viste de azul oscuro, parecido a Crecer: el detector lo
-# ve como `player` buena parte del tiempo, y con solo el corte de la mitad el
-# color lo mandaba al equipo rival (ver decisiones.md, "El arquero de azul oscuro
-# es de Sportivo"). La distancia deja afuera a un jugador de campo cuyo track
-# saltó a un arquero: el #2520 de sportivo_crop3, de blanco, con 27% de filas
-# `goalkeeper` a 35 m de donde jugaba. Los dos cortes salen de ese partido.
-PROPORCION_MIN_ARQUERO_CERCA = 0.2
-MAX_DIST_FILAS_ARQUERO_M = 20.0
-
 # Diferencia mínima de luminancia (0-255) entre los dos colores de equipo
 # para que el orden "home = más clara" sea confiable (ver
 # _asignar_por_clustering). Por debajo de esto se avisa: con dos camisetas
@@ -483,23 +472,14 @@ def colores_de_referencia(match_name: str, outputs_dir: Path | None = None) -> t
 
 
 def tracks_arquero(df: pd.DataFrame) -> set[int]:
-    """Tracks de arquero: mayormente `goalkeeper` (más de PROPORCION_MIN_ARQUERO),
-    o con parte de sus filas así y en el lugar donde juega el track (ver
-    PROPORCION_MIN_ARQUERO_CERCA; requiere field_x). El resto de los tracks con
-    alguna fila goalkeeper se tratan como jugadores de campo: equipo por color."""
+    """Tracks cuyas filas de persona son mayormente `goalkeeper` (más de
+    PROPORCION_MIN_ARQUERO). El resto de los tracks con alguna fila
+    goalkeeper se tratan como jugadores de campo: equipo por color."""
     personas = df[df["class_name"].isin(("player", "goalkeeper"))]
     if personas.empty:
         return set()
-    es_arquero = personas["class_name"] == "goalkeeper"
-    fraccion = es_arquero.groupby(personas["track_id"]).mean()
-    ids = {int(t) for t in fraccion.index[fraccion > PROPORCION_MIN_ARQUERO]}
-    if "field_x" in personas.columns:
-        x_habitual = personas.groupby("track_id")["field_x"].median()
-        x_arquero = personas[es_arquero].groupby("track_id")["field_x"].mean()
-        cerca = (x_habitual - x_arquero).abs() <= MAX_DIST_FILAS_ARQUERO_M
-        ids |= {int(t) for t in fraccion.index[fraccion > PROPORCION_MIN_ARQUERO_CERCA]
-                if cerca.get(t, False)}
-    return ids
+    fraccion = (personas["class_name"] == "goalkeeper").groupby(personas["track_id"]).mean()
+    return {int(t) for t in fraccion.index[fraccion > PROPORCION_MIN_ARQUERO]}
 
 
 def _asignar_arqueros(df: pd.DataFrame, equipo_por_track: dict[int, str],
@@ -681,8 +661,6 @@ def asignar_equipos(video_path, df: pd.DataFrame,
         "n_muestras_validas": len(muestras),
         "n_por_color": n_por_color,
         "n_arqueros_por_geometria": len(set(equipo_por_track) & ids_arquero),
-        # Para que el mapa los deje fuera del bloque aunque tengan filas `player`.
-        "ids_arquero": sorted(ids_arquero),
         "colores_cluster_rgb": [tuple(int(round(c)) for c in centro) for centro in centros_cluster],
         "orden_etiquetas_confiable": orden_confiable,
         # None si se usó el rango fijo (pasto_adaptativo=False o no se pudo estimar)
