@@ -180,9 +180,52 @@ def _html_tarjeta(row, titulo: str, team_label: str, team_color: str) -> str:
 """
 
 
-def _ir_a(t: float) -> None:
-    """Pide el salto a la Mesa táctica (main.py aplica `_pending_seek_time`)."""
+def _ir_a(t: float, ancla: str | None = None) -> None:
+    """Pide el salto a la Mesa táctica (main.py aplica `_pending_seek_time`).
+    `ancla`: la tarjeta desde la que se saltó. Streamlit descarta el estado de
+    los widgets que dejan de dibujarse, así que se anota también el filtro y
+    las perillas, para que "Volver a Patrones" deje la vista como estaba."""
     st.session_state["_pending_seek_time"] = float(t)
+    if ancla:
+        perillas = [_clave_perilla(n) for grupo in _PERILLAS.values() for n, *_ in grupo]
+        st.session_state["_regreso_a_patrones"] = {
+            "ancla": ancla,
+            "match": st.session_state.get("selected_match"),
+            "en_prueba": ancla.startswith("prueba_"),
+            "widgets": {k: st.session_state[k] for k in ["filtro_equipo_patrones", *perillas] if k in st.session_state},
+        }
+
+
+def hay_regreso_a_patrones(match_name: str) -> bool:
+    regreso = st.session_state.get("_regreso_a_patrones")
+    return bool(regreso) and regreso["match"] == match_name
+
+
+def volver_a_patrones() -> None:
+    """Callback del botón de la Mesa táctica: vuelve a la vista de Patrones,
+    como estaba y en la tarjeta desde la que se saltó."""
+    regreso = st.session_state.pop("_regreso_a_patrones", None)
+    if not regreso:
+        return
+    st.session_state.update(regreso["widgets"])
+    st.session_state["_prueba_abierta"] = regreso["en_prueba"]
+    st.session_state["_scroll_a_tarjeta"] = regreso["ancla"]
+    st.session_state["vista"] = "patrones"
+
+
+def _scroll_a_tarjeta(ancla: str) -> None:
+    """Lleva la página a una tarjeta, que puede tardar en dibujarse."""
+    st.html(f"""<script>
+(() => {{
+  let intentos = 0;
+  const buscar = () => {{
+    const tarjeta = window.parent.document.querySelector(".st-key-{ancla}") || document.querySelector(".st-key-{ancla}");
+    if (tarjeta) {{ tarjeta.scrollIntoView({{block: "center"}}); }}
+    else if (++intentos < 100) {{ setTimeout(buscar, 100); }}
+  }};
+  setTimeout(buscar, 100);
+}})();
+</script>""", unsafe_allow_javascript=True)
 
 
 # ── Revisión del cuerpo técnico ─────────────────────────────────
@@ -253,7 +296,7 @@ def _render_tramos(match_name: str | None, row: pd.Series, criterios: dict, pref
             st.button(
                 format_time(t_ini), key=f"{prefijo}btn_seek_{patron}_{track_id}_{j}",
                 icon=":material/play_arrow:", type="primary" if j == 0 else "secondary",
-                on_click=_ir_a, args=(t_ini,),
+                on_click=_ir_a, args=(t_ini, f"{'prueba' if prefijo else 'patron'}_{patron}_{track_id}"),
                 help="Ver la jugada en la Mesa táctica (video y cancha).",
             )
             if califica:
@@ -360,7 +403,7 @@ def _restablecer_perillas() -> None:
 
 
 def _render_probar_criterios(df: pd.DataFrame, match_name: str, patrones: pd.DataFrame, vigentes: dict) -> None:
-    with st.expander("Probar otros criterios (no cambia nada)"):
+    with st.expander("Probar otros criterios (no cambia nada)", expanded=st.session_state.get("_prueba_abierta", False)):
         st.caption("Recalcula este partido con otros umbrales y muestra qué momentos aparecerían o desaparecerían, "
                    "y qué había dicho el cuerpo técnico de cada uno. **No guarda nada ni cambia lo que ven los demás.** "
                    "Los momentos nuevos se pueden calificar acá mismo, para juntar evidencia antes de cambiar un criterio.")
@@ -418,13 +461,17 @@ def _render_probar_criterios(df: pd.DataFrame, match_name: str, patrones: pd.Dat
                     _render_revision(match_name, row, criterios_prueba, vigentes.get(clave), prefijo="prueba_")
                 elif len(evidencia):
                     c_ir.button(format_time(evidencia[0][0]), key=f"prueba_ir_{row['patron']}_{row['track_id']}",
-                                icon=":material/play_arrow:", on_click=_ir_a, args=(evidencia[0][0],), width="stretch")
+                                icon=":material/play_arrow:", on_click=_ir_a,
+                                args=(evidencia[0][0], f"prueba_{row['patron']}_{row['track_id']}"), width="stretch")
 
 
 def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
     """Renderiza el contenido de la vista de Patrones Tácticos."""
     st.html(_ESTILOS)
     st.html(_HERO)
+    ancla = st.session_state.pop("_scroll_a_tarjeta", None)
+    if ancla:
+        _scroll_a_tarjeta(ancla)
 
     if "team" not in df.columns or df["team"].dropna().empty:
         st.warning(
@@ -459,12 +506,14 @@ def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
         for aviso in avisos:
             st.caption(f"⚠️ _{aviso}_")
 
-    # Filtro por equipo (no por severidad: la severidad solo ordena la lista)
+    # Filtro por equipo (no por severidad: la severidad solo ordena la lista).
+    # Sin `default`, porque "Volver a Patrones" le restaura el valor por session_state.
+    if "filtro_equipo_patrones" not in st.session_state:
+        st.session_state["filtro_equipo_patrones"] = "todos"
     equipo_filtro = st.segmented_control(
         "Equipo",
         options=["todos", "home", "away"],
         format_func=lambda x: "Ambos equipos" if x == "todos" else TEAM_LABELS.get(x, x),
-        default="todos",
         key="filtro_equipo_patrones",
     )
 

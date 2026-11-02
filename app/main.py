@@ -38,7 +38,7 @@ from components.team_selector import render_team_selector
 from components.video_registry import render_video_registry
 
 # Patrones tácticos detectados (src/analysis/tactical_patterns.py)
-from components.tactical_patterns_view import render_tactical_patterns_tab
+from components.tactical_patterns_view import hay_regreso_a_patrones, render_tactical_patterns_tab, volver_a_patrones
 
 # Login local, roles y administración de usuarios (src/db/usuarios_repo.py)
 from components.sesion import (nombre_rol, puede, render_login, render_menu_usuario, usuario_actual,
@@ -458,6 +458,7 @@ def main():
         t = st.session_state.pop("_pending_seek_time")
         st.session_state["current_time"] = t
         st.session_state["vista"] = "analisis"
+        st.session_state["_subir_pagina"] = True
         _pedir_salto(t)
 
     # ── Encabezado: marca, partido, navegación y cambio de partido ──
@@ -510,12 +511,25 @@ def main():
     if vista != "analisis":
         st.session_state["_video_lugar"] = None
     if vista == "analisis":
+        # Después de un salto, la página seguía donde estaba en la otra vista,
+        # con el video y "Volver a Patrones" fuera de la pantalla.
+        if st.session_state.pop("_subir_pagina", False):
+            st.html("""<script>setTimeout(() => {
+                let e = document.querySelector(".st-key-app_header");
+                while (e && e.scrollHeight <= e.clientHeight) e = e.parentElement;
+                e?.scrollTo(0, 0);
+            }, 100);</script>""", unsafe_allow_javascript=True)
         # El modo del visor cambia la disposición, así que vive afuera del
         # fragmento: cambiarlo redibuja la página entera (pasa pocas veces).
-        modo = st.segmented_control(
-            "Modo del visor", list(_MODOS_VISOR), format_func=_MODOS_VISOR.get,
-            required=True, key="modo_visor", label_visibility="collapsed",
-        )
+        with st.container(horizontal=True, vertical_alignment="center"):
+            modo = st.segmented_control(
+                "Modo del visor", list(_MODOS_VISOR), format_func=_MODOS_VISOR.get,
+                required=True, key="modo_visor", label_visibility="collapsed",
+            )
+            # Después de saltar desde una tarjeta de Patrones, para volver a ella.
+            if hay_regreso_a_patrones(match["name"]):
+                st.button("Volver a Patrones", icon=":material/arrow_back:", key="volver_a_patrones",
+                          on_click=volver_a_patrones)
         hay_video = match["tracked_video"].exists()
         mostrar_video = hay_video and modo in ("dividido", "video")
         mostrar_cancha = modo in ("dividido", "cancha") or not hay_video

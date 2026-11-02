@@ -999,6 +999,17 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
   - en el video anotado, #2158 y #931 se ven con su número en su primer tramo.
 - **Tiempo:** ~1,5 s más por tiempo del partido (de 21,8 a 23 s y de 29 a 30,8 s).
 
+## "Volver a Patrones" desde la Mesa táctica (02/11/2026, pedido de Santi)
+
+**Qué hace:** después de saltar a un tramo desde una tarjeta de Patrones, la Mesa táctica muestra el botón "Volver a Patrones", junto al modo del visor. Lleva a la misma tarjeta y deja la vista como estaba.
+- **Qué restaura:** el filtro de equipo, las perillas y el desplegable "Probar otros criterios". Streamlit descarta el estado de los widgets que dejan de dibujarse, así que `_ir_a` anota esos valores al saltar (`_regreso_a_patrones`).
+- **Cuándo aparece:** solo si el partido o tiempo abierto es el del salto. Un salto desde otra vista no lo pisa.
+- **De paso:** todo salto ahora sube al comienzo de la página. Antes la Mesa táctica quedaba en la posición de la otra vista, con el video y este botón fuera de la pantalla.
+
+**Verificado:** AppTest sobre una copia aislada, desde una tarjeta común y desde una de la prueba, con otro tiempo abierto. En el navegador, sobre otra copia: al saltar, el botón queda visible arriba, con el video en el segundo pedido; al volver a una tarjeta de la prueba, queda en el mismo lugar de la pantalla (138 px antes y después), con el desplegable abierto y las perillas en 30 y 50.
+
+**Límite:** al volver, la lleva a la tarjeta, no al píxel exacto: la tarjeta queda centrada si antes estaba en otra posición.
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.
