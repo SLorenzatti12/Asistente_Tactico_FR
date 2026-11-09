@@ -147,6 +147,8 @@ from src.analysis.team_assignment import tracks_arquero  # noqa: E402
 # Las filas de tramos sin calibración válida (cámara movida) no entran en
 # fases, líneas ni candidatos a fusión: ahí los metros están corridos.
 from src.homography.tramos_validos import filtrar_tramos_no_validos  # noqa: E402
+# Posible juego detenido: se marca en cada momento, sin sacar ninguno.
+from src.analysis.estado_juego import detectar_juego_detenido, marcar_momentos  # noqa: E402
 # Un video = un tiempo: si los equipos cambian de lado a mitad del video, no
 # hay UNA dirección de ataque — se frena en vez de calcular algo mezclado.
 from src.analysis.lados import (  # noqa: E402
@@ -1169,7 +1171,8 @@ def _sin_tracks_de_arquero(patrones: pd.DataFrame, df: pd.DataFrame) -> tuple:
 
 
 def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFrame,
-                      criterios: dict | None = None, pelotas_paradas=None) -> pd.DataFrame:
+                      criterios: dict | None = None, pelotas_paradas=None,
+                      juego_detenido: pd.DataFrame | None = None) -> pd.DataFrame:
     """
     Corre los patrones implementados (desconectado, no_achica) y devuelve
     una fila por (track_id, patrón detectado) — solo para las combinaciones
@@ -1192,7 +1195,10 @@ def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFram
         absoluta), posible_mismo_jugador_que (lista de otros track_id que
         detectar_candidatos_fusion() marcó como candidatos a ser la misma
         persona que este — vacía si no hay ninguno; ver esa función para
-        el criterio. NO están fusionados, es solo un aviso).
+        el criterio. NO están fusionados, es solo un aviso),
+        fraccion_juego_detenido (0-1, qué parte de sus tramos cae en un
+        posible juego detenido) y posible_juego_detenido (bool; ver
+        estado_juego.py: solo marca, no saca el momento).
 
         valor_tecnico por patrón:
           - desconectado: cuántas veces su desvío de profundidad respecto
@@ -1261,6 +1267,16 @@ def detectar_patrones(df: pd.DataFrame, fases: pd.DataFrame, lineas: pd.DataFram
             .sort_values("severidad", ascending=False)
             .reset_index(drop=True)
         )
+
+    # Posible juego detenido (ver estado_juego.py): agrega
+    # `fraccion_juego_detenido` y `posible_juego_detenido` al final. Solo marca:
+    # no saca momentos ni toca la severidad ni las demás columnas.
+    # `juego_detenido`: los intervalos ya calculados; None → se calculan de `df`.
+    if juego_detenido is None:
+        juego_detenido = detectar_juego_detenido(df)
+    resultado = marcar_momentos(resultado, juego_detenido)
+    resultado.attrs["juego_detenido"] = [[float(a), float(b)] for a, b in
+                                         zip(juego_detenido["inicio"], juego_detenido["fin"])]
 
     # avisos de dirección: se juntan los de fases/lineas (ya calculados ahí)
     # sin duplicar mensajes idénticos.
@@ -1386,6 +1402,9 @@ def _imprimir_patrones(patrones: pd.DataFrame) -> None:
             tracks = ", ".join(str(t) for t in fila.posible_mismo_jugador_que)
             print(f"  ⚠️  posible el mismo jugador que track(s): {tracks} "
                   f"(no fusionado — ver detectar_candidatos_fusion)")
+        if fila.get("posible_juego_detenido"):
+            print(f"  ⏸  posible juego detenido en el {fila.fraccion_juego_detenido:.0%} de sus tramos: "
+                  f"revisá en el video si la pelota estaba en juego")
 
 
 def _imprimir_candidatos_fusion(candidatos: pd.DataFrame) -> None:
@@ -1408,6 +1427,9 @@ def _guardar_patrones(patrones: pd.DataFrame, entrada: Path, destino: Path, vent
     meta = meta_base(__file__, {"ventana_fase_seg": ventana_fase,
                                 "criterios": patrones.attrs.get("criterios"),
                                 "tramos_excluidos": patrones.attrs.get("tramos_excluidos")})
+    from src.analysis.estado_juego import parametros_completos
+    meta["juego_detenido"] = {"parametros": parametros_completos(),
+                              "intervalos": patrones.attrs.get("juego_detenido", [])}
     meta["resultado"] = {
         "momentos": len(patrones),
         "patrones_no_evaluados": patrones.attrs.get("patrones_no_evaluados", []),

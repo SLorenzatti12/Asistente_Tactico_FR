@@ -139,6 +139,10 @@ _ESTILOS = """
 .at-card-box .k { font-size: 0.68rem; color: var(--at-text-3, #626c7a); text-transform: uppercase; letter-spacing: 0.06em; }
 .at-card-box .v { font-family: var(--at-mono, monospace); font-size: 0.85rem; color: var(--at-text-1, #f0f3f6); }
 .at-card-ev { font-size: 0.72rem; color: var(--at-text-3, #626c7a); text-transform: uppercase; letter-spacing: 0.06em; }
+.at-card-pausa { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-radius: 8px;
+                 background: rgba(245, 181, 68, 0.10); border: 1px solid rgba(245, 181, 68, 0.45); }
+.at-card-pausa b { color: #f5b544; font-size: 0.85rem; }
+.at-card-pausa span { color: var(--at-text-2, #9aa4b2); font-size: 0.8rem; }
 </style>
 """
 
@@ -176,8 +180,23 @@ def _html_tarjeta(row, titulo: str, team_label: str, team_color: str) -> str:
 <div class="at-card-title">{html.escape(titulo)}</div>
 <div class="at-card-track">Track #{row['track_id']}</div>
 <div class="at-card-text">{html.escape(str(row['descripcion']))}</div>
-<div class="at-card-box">{caja}</div>
+{_html_juego_detenido(row)}<div class="at-card-box">{caja}</div>
 """
+
+
+_AYUDA_JUEGO_DETENIDO = "El movimiento general bajó; revisá en el video si la pelota estaba en juego."
+
+
+def _juego_detenido(row) -> bool:
+    """Si el momento está marcado (ver estado_juego.py). Sin la columna, no."""
+    return bool(row.get("posible_juego_detenido", False))
+
+
+def _html_juego_detenido(row) -> str:
+    if not _juego_detenido(row):
+        return ""
+    return (f'<div class="at-card-pausa"><b>⏸ Posible juego detenido</b>'
+            f'<span>{_AYUDA_JUEGO_DETENIDO} ({row["fraccion_juego_detenido"]:.0%} de sus tramos)</span></div>')
 
 
 def _ir_a(t: float, ancla: str | None = None) -> None:
@@ -192,7 +211,8 @@ def _ir_a(t: float, ancla: str | None = None) -> None:
             "ancla": ancla,
             "match": st.session_state.get("selected_match"),
             "en_prueba": ancla.startswith("prueba_"),
-            "widgets": {k: st.session_state[k] for k in ["filtro_equipo_patrones", *perillas] if k in st.session_state},
+            "widgets": {k: st.session_state[k] for k in ["filtro_equipo_patrones", "ocultar_juego_detenido", *perillas]
+                        if k in st.session_state},
         }
 
 
@@ -454,7 +474,9 @@ def _render_probar_criterios(df: pd.DataFrame, match_name: str, patrones: pd.Dat
             with st.container(border=True, key=f"prueba_{row['patron']}_{row['track_id']}"):
                 c_txt, c_ir = st.columns([4, 1], vertical_alignment="center")
                 c_txt.markdown(f"**{estado}** · {PATRON_TITULOS.get(row['patron'], row['patron'])} · track {row['track_id']} · "
-                               f"{TEAM_LABELS.get(row['team'], row['team'])} · {opinion(clave)}")
+                               f"{TEAM_LABELS.get(row['team'], row['team'])} · {opinion(clave)}"
+                               + (" · :orange[⏸ posible juego detenido]" if _juego_detenido(row) else ""),
+                               help=_AYUDA_JUEGO_DETENIDO if _juego_detenido(row) else None)
                 evidencia = row.get("evidencia_seg", [])
                 if estado == "NUEVO":
                     _render_tramos(match_name, row, criterios_prueba, prefijo="prueba_")
@@ -510,25 +532,34 @@ def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
     # Sin `default`, porque "Volver a Patrones" le restaura el valor por session_state.
     if "filtro_equipo_patrones" not in st.session_state:
         st.session_state["filtro_equipo_patrones"] = "todos"
-    equipo_filtro = st.segmented_control(
-        "Equipo",
-        options=["todos", "home", "away"],
-        format_func=lambda x: "Ambos equipos" if x == "todos" else TEAM_LABELS.get(x, x),
-        key="filtro_equipo_patrones",
-    )
+    if "ocultar_juego_detenido" not in st.session_state:
+        st.session_state["ocultar_juego_detenido"] = False
+    with st.container(horizontal=True, vertical_alignment="center", gap="medium"):
+        equipo_filtro = st.segmented_control(
+            "Equipo",
+            options=["todos", "home", "away"],
+            format_func=lambda x: "Ambos equipos" if x == "todos" else TEAM_LABELS.get(x, x),
+            key="filtro_equipo_patrones",
+        )
+        ocultar_detenido = st.toggle(
+            "Ocultar momentos con posible juego detenido", key="ocultar_juego_detenido",
+            help="Los marcados no se borran ni cambian: solo se ocultan de la lista. " + _AYUDA_JUEGO_DETENIDO,
+        )
 
     # Filtrar resultados. detectar_patrones ya los devuelve ordenados por
     # severidad, de más a menos señal: ese es el único uso de la severidad acá.
     df_filtrado = patrones.copy()
     if not df_filtrado.empty and equipo_filtro not in (None, "todos"):
         df_filtrado = df_filtrado[df_filtrado["team"] == equipo_filtro]
+    if ocultar_detenido and "posible_juego_detenido" in df_filtrado.columns:
+        df_filtrado = df_filtrado[~df_filtrado["posible_juego_detenido"].astype(bool)]
 
     # Sin patrones detectados
     if df_filtrado.empty:
         if patrones.empty:
             st.success("✅ No se detectaron desajustes tácticos sostenidos en este clip.")
         else:
-            st.caption("No hay momentos para revisar de este equipo.")
+            st.caption("No hay momentos para revisar con estos filtros.")
         if match_name:
             _render_probar_criterios(df, match_name, patrones, vigentes)
         _render_lo_que_dijo_el_club()
