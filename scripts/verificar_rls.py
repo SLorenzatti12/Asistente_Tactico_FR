@@ -5,11 +5,15 @@ Comprueba, contra el proyecto real:
 
   1. Con la clave PÚBLICA (SUPABASE_KEY): no se puede leer ninguna tabla, ni
      insertar, ni listar o subir videos al bucket `match-videos`.
-  2. Con la clave SECRETA (SUPABASE_SECRET_KEY): se leen todas las tablas
-     (lo que usa el sync).
+  2. Con la clave SECRETA (SUPABASE_SECRET_KEY, o el nombre viejo
+     SUPABASE_SERVICE_ROLE_KEY): se leen todas las tablas, y se puede insertar
+     y borrar una fila de prueba en `clubs` (lo que usa el sync). Esta
+     comprobación de escritura viene de la versión de Nico.
 
-Si con la clave pública algo SÍ se pudo escribir (RLS sin aplicar), lo borra
-enseguida con la clave secreta y lo informa como FALLA.
+ESCRIBE EN LA NUBE: intenta insertar y subir un archivo con la clave pública
+(si RLS está bien, la nube lo rechaza), e inserta y borra una fila de prueba
+con la secreta. Si con la clave pública algo SÍ se pudo escribir (RLS sin
+aplicar), lo borra enseguida con la clave secreta y lo informa como FALLA.
 
     python3 scripts/verificar_rls.py
 
@@ -25,7 +29,8 @@ sys.path.insert(0, str(ROOT))
 from src.db.supabase_client import SupabaseConfigError, get_client, get_client_publico  # noqa: E402
 
 TABLAS = ["clubs", "users", "teams", "players", "matches", "match_videos",
-          "calibrations", "tracking_outputs", "events", "player_ratings", "match_metrics"]
+          "calibrations", "tracking_outputs", "events", "player_ratings", "match_metrics",
+          "match_halves"]
 BUCKET = "match-videos"
 MARCA = "__prueba_rls__"
 
@@ -72,6 +77,13 @@ def verificar(publico, secreto) -> list[tuple[str, bool, str]]:
             res.append((f"secreta lee {tabla}", True, "ok"))
         except Exception as e:  # noqa: BLE001
             res.append((f"secreta lee {tabla}", False, _corto(e)))
+
+    try:
+        creado = secreto.table("clubs").insert({"name": MARCA}).execute().data
+        secreto.table("clubs").delete().eq("name", MARCA).execute()
+        res.append(("secreta inserta y borra en clubs", bool(creado), "ok" if creado else "no devolvió la fila"))
+    except Exception as e:  # noqa: BLE001
+        res.append(("secreta inserta y borra en clubs", False, _corto(e)))
     return res
 
 

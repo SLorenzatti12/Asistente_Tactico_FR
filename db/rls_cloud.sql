@@ -5,12 +5,13 @@
 -- ("Supabase: RLS activada…") y docs/context/8-base-de-datos-hibrida.md.
 --
 -- Qué hace:
---   1. Activa RLS en todas las tablas de db/schema_cloud.sql, SIN políticas
---      para `anon` ni `authenticated`: con la clave pública (publishable /
---      anon) no se lee ni se escribe ninguna fila.
+--   1. Activa RLS en TODAS las tablas del esquema `public` (las de
+--      db/schema_cloud.sql, incluida match_halves, y cualquiera que se agregue
+--      después), SIN políticas para `anon` ni `authenticated`: con la clave
+--      pública (publishable / anon) no se lee ni se escribe ninguna fila.
 --   2. Le saca a `anon` todos los permisos sobre esas tablas (defensa en
 --      profundidad: aunque alguien desactive RLS por error, la clave pública
---      sigue sin acceso).
+--      sigue sin acceso), también para las tablas que se creen más adelante.
 --   3. Deja el bucket `match-videos` privado y borra las políticas de
 --      Storage que le daban acceso a `anon` (o a `public`) sobre ese bucket.
 --
@@ -29,23 +30,22 @@
 -- ============================================================================
 
 -- ── 1 y 2. Tablas ───────────────────────────────────────────────────────
+-- Todas las tablas de `public`, no una lista fija: una lista se queda corta
+-- cuando el esquema crece (le pasó a match_halves, 09/11/2026).
 do $$
 declare
     tabla text;
 begin
-    foreach tabla in array array[
-        'clubs', 'users', 'teams', 'players', 'matches', 'match_videos',
-        'calibrations', 'tracking_outputs', 'events', 'player_ratings', 'match_metrics'
-    ] loop
-        if to_regclass('public.' || tabla) is not null then
-            execute format('alter table public.%I enable row level security', tabla);
-            execute format('revoke all on table public.%I from anon', tabla);
-        end if;
+    for tabla in select tablename from pg_tables where schemaname = 'public' loop
+        execute format('alter table public.%I enable row level security', tabla);
+        execute format('revoke all on table public.%I from anon', tabla);
     end loop;
 end
 $$;
 
 -- Que las tablas que se creen más adelante tampoco le den permisos a `anon`.
+-- (RLS no se activa sola en una tabla nueva: volver a correr este archivo
+-- después de cambiar db/schema_cloud.sql.)
 alter default privileges in schema public revoke all on tables from anon;
 
 -- ── 3. Storage: bucket privado y sin acceso para la clave pública ───────

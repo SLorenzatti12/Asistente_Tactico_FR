@@ -143,6 +143,6 @@ Piezas locales (`src/db/`), cada una dueña de su propia tabla en el mismo archi
 - `video_repo.py` — ruta local del video crudo de cada partido, y si ya se subió.
 - `local.py` — helpers de solo-lectura sobre `events`/`semaforo` (tablas de `tagging.py`) para el sync.
 - `sync.py` — orquesta el sync: plantel como mirror completo por equipo (upsert + borra en la nube lo que ya no está local), sube el video real a un bucket **privado** de Supabase Storage (`match-videos`), y sincroniza eventos/calificaciones. Todo vía `scripts/sync_to_cloud.py`, nunca desde un botón de Streamlit (subir un video de cientos de MB colgaría la interfaz síncrona de Streamlit).
-- `supabase_client.py` — único punto de conexión. `get_client()` usa la clave secreta (`SUPABASE_SECRET_KEY`, solo de env/`.env`, nunca de `secrets.toml`) y rechaza la pública; `get_client_publico()` solo para `scripts/verificar_rls.py`.
+- `supabase_client.py` — único punto de conexión. `get_client()` y `get_privileged_client()` (el nombre que usa `sync.py`) son el mismo cliente con la clave secreta (`SUPABASE_SECRET_KEY`, o el nombre viejo `SUPABASE_SERVICE_ROLE_KEY`; solo de env/`.env`, nunca de `secrets.toml`) y rechazan la pública; `get_client_publico()` solo para `scripts/verificar_rls.py`.
 
 `db/schema_cloud.sql` es el DDL del lado Supabase — se pega a mano en el SQL Editor del proyecto, es idempotente (`create table if not exists`).

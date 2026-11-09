@@ -57,3 +57,10 @@ app/static/
 .DS_Store
 Thumbs.db
 *.log
+
+# ── Skills autogeneradas por herramientas locales ──────────
+# Streamlit crea estos symlinks apuntando a la instalación local de Python
+# (ruta absoluta específica de cada máquina) — no son código fuente y se
+# rompen en cualquier otra computadora o clon del repo.
+.agents/skills/
+.claude/skills/

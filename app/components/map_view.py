@@ -49,6 +49,8 @@ import streamlit as st
 from theme import (
     BALL_COLOR,
     FIELD_BG,
+    FIELD_BG_ALT,
+    FIELD_LINE_ALPHA,
     FIELD_LINES,
     TEAM_COLORS,
     TEAM_LABELS,
@@ -192,24 +194,72 @@ def _block_metrics(players_df: pd.DataFrame) -> dict | None:
 
 
 # ── Dibujo del mapa ──────────────────────────────────────────
+def _path_arco(cx: float, cy: float, r: float, theta0: float, theta1: float, n: int = 24) -> str:
+    """Tramo de circunferencia como path SVG ("M x y L ..."): Plotly no tiene
+    un shape de arco parcial."""
+    theta = np.linspace(theta0, theta1, n)
+    puntos = [f"{cx + r * np.cos(t):.3f} {cy + r * np.sin(t):.3f}" for t in theta]
+    return "M " + " L ".join(puntos)
+
+
+def _add_spot(fig: go.Figure, cx: float, cy: float, r: float = 0.28) -> None:
+    """Punto reglamentario (central, penal): círculo relleno."""
+    fig.add_shape(type="circle", x0=cx - r, y0=cy - r, x1=cx + r, y1=cy + r,
+                  fillcolor=FIELD_LINES, line=dict(width=0), layer="below")
+
+
 def _draw_field_shapes(fig: go.Figure, medidas: dict | None = None) -> go.Figure:
     """
-    Líneas de la cancha como shapes del layout (perímetro, mitad, círculo
-    central, áreas grande y chica), con las medidas del estadio. Sin
-    `medidas`, la reglamentaria de 105×68 (así la llama player_stats_view.py).
+    La cancha estilo mockup (Nico), con las medidas del estadio (Santi):
+    césped rayado y todas las marcas (perímetro, mitad, círculo y punto
+    central, áreas grande y chica, puntos de penal, medialunas y arcos de
+    esquina). Sin `medidas`, la reglamentaria de 105×68 (así la llama
+    player_stats_view.py).
+
+    Todo va como shapes del layout con layer="below", debajo de los
+    jugadores. Las medialunas y los arcos de esquina son paths, no trazas
+    (go.Scatter): así el mapa tiene las mismas trazas que antes.
     """
     medidas = completar_medidas(medidas)
     L, W = medidas["largo"], medidas["ancho"]
     r = medidas["radio_circulo"]
-    fina = dict(color=FIELD_LINES, width=1)
-    fig.add_shape(type="rect", x0=0, y0=0, x1=L, y1=W, line=dict(color=FIELD_LINES, width=2))
-    fig.add_shape(type="line", x0=L / 2, y0=0, x1=L / 2, y1=W, line=fina)
-    fig.add_shape(type="circle", x0=L / 2 - r, y0=W / 2 - r, x1=L / 2 + r, y1=W / 2 + r, line=fina)
-    for prof, ancho in ((medidas["area_grande_largo"], medidas["area_grande_ancho"]),
-                        (medidas["area_chica_largo"], medidas["area_chica_ancho"])):
-        y0, y1 = (W - ancho) / 2, (W + ancho) / 2
-        fig.add_shape(type="rect", x0=0, y0=y0, x1=prof, y1=y1, line=fina)
-        fig.add_shape(type="rect", x0=L - prof, y0=y0, x1=L, y1=y1, line=fina)
+    linea = dict(color=FIELD_LINE_ALPHA, width=1.5)
+
+    # Césped rayado: franjas verticales alternadas
+    n_franjas = 10
+    for i in range(n_franjas):
+        fig.add_shape(type="rect", x0=i * L / n_franjas, y0=0, x1=(i + 1) * L / n_franjas, y1=W,
+                      fillcolor=FIELD_BG if i % 2 == 0 else FIELD_BG_ALT, line=dict(width=0), layer="below")
+
+    # Perímetro, mitad, círculo y punto central
+    fig.add_shape(type="rect", x0=0, y0=0, x1=L, y1=W, line=linea, layer="below")
+    fig.add_shape(type="line", x0=L / 2, y0=0, x1=L / 2, y1=W, line=linea, layer="below")
+    fig.add_shape(type="circle", x0=L / 2 - r, y0=W / 2 - r, x1=L / 2 + r, y1=W / 2 + r,
+                  line=linea, layer="below")
+    _add_spot(fig, L / 2, W / 2)
+
+    # Áreas, punto penal y medialuna, de cada lado
+    penal = medidas["distancia_penal"]
+    # Medialuna: el tramo del círculo de radio `r`, con centro en el punto
+    # penal, que queda fuera del área grande. Corta el frente del área en
+    # cos(theta) = (profundidad del área - distancia del penal) / r.
+    theta = float(np.arccos(np.clip((medidas["area_grande_largo"] - penal) / r, -1.0, 1.0)))
+    for x_fondo, sentido in ((0.0, 1), (L, -1)):
+        for prof, ancho in ((medidas["area_grande_largo"], medidas["area_grande_ancho"]),
+                            (medidas["area_chica_largo"], medidas["area_chica_ancho"])):
+            x_frente = x_fondo + sentido * prof
+            fig.add_shape(type="rect", x0=min(x_fondo, x_frente), y0=(W - ancho) / 2,
+                          x1=max(x_fondo, x_frente), y1=(W + ancho) / 2, line=linea, layer="below")
+        x_penal = x_fondo + sentido * penal
+        _add_spot(fig, x_penal, W / 2)
+        centro = 0.0 if sentido == 1 else np.pi
+        fig.add_shape(type="path", path=_path_arco(x_penal, W / 2, r, centro - theta, centro + theta),
+                      line=linea, layer="below")
+
+    # Arcos de esquina (1 m)
+    for cx, cy, t0, t1 in ((0, 0, 0, np.pi / 2), (0, W, -np.pi / 2, 0),
+                           (L, 0, np.pi / 2, np.pi), (L, W, np.pi, 3 * np.pi / 2)):
+        fig.add_shape(type="path", path=_path_arco(cx, cy, 1.0, t0, t1), line=linea, layer="below")
     return fig
 
 

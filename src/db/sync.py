@@ -5,12 +5,13 @@ Una sola dirección (local → nube), manual, pensado para correr cuando hay
 conexión a internet (después del partido, en el club, en casa) — NO se
 ejecuta automáticamente ni es requisito para tagear/calificar en cancha.
 
-Sincroniza tres cosas, en este orden:
+Sincroniza, en este orden:
 
   1. Plantel de cada equipo (mirror completo — ver sync_roster_for_team).
-  2. Video del partido, si hay uno registrado sin subir (archivo real, a
+  2. Partidos de dos tiempos (mirror completo — ver sync_partido_tiempos).
+  3. Video del partido, si hay uno registrado sin subir (archivo real, a
      un bucket privado de Supabase Storage).
-  3. Eventos y calificaciones de semáforo del partido.
+  4. Eventos y calificaciones de semáforo del partido.
 
 Uso: ver scripts/sync_to_cloud.py (CLI). Programáticamente:
 
@@ -23,8 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import local as loc
-from . import roster_repo, team_repo, video_repo
-from .supabase_client import get_client
+from . import partido_repo, roster_repo, team_repo, video_repo
+from .supabase_client import get_privileged_client
 
 # Mapeo directo de rating local -> check constraint de player_ratings.rating
 _VALID_RATINGS = {"bajo", "regular", "destacado"}
@@ -104,8 +105,31 @@ def sync_all_rosters() -> dict[str, dict]:
     """Sincroniza el plantel de todos los equipos locales."""
     team_repo.init_teams_table()
     roster_repo.init_roster_table()
-    client = get_client()
+    client = get_privileged_client()
     return {team["name"]: sync_roster_for_team(client, team) for team in team_repo.list_teams()}
+
+
+def sync_partido_tiempos(client) -> dict:
+    """Sincroniza `partido_tiempos` (local, ver src/db/partido_repo.py) a
+    `match_halves`: para cada partido de dos tiempos, agrupa en la nube las
+    filas de `matches` de sus dos videos. Mirror completo como el plantel
+    (upsert + no deja huérfanos) porque la tabla es chica.
+
+    Cada tiempo ya tiene su propia fila en `matches` (se crea/encuentra por
+    `local_key` = nombre del video, igual que en sync_match) — esta función
+    no la duplica, solo referencia su id.
+    """
+    partido_repo.init_partidos_table()
+    partidos_subidos = 0
+    for partido, tiempos in partido_repo.list_partidos().items():
+        for t in tiempos:
+            match_id = _get_or_create_match(client, t["match_name"])
+            client.table("match_halves").upsert(
+                {"partido": partido, "tiempo": t["tiempo"], "match_id": match_id},
+                on_conflict="partido,tiempo",
+            ).execute()
+            partidos_subidos += 1
+    return {"tiempos_subidos": partidos_subidos}
 
 
 def _upload_video(client, match_name: str, local_path: str) -> str:
@@ -134,7 +158,7 @@ def sync_match(match_name: str) -> dict:
     "ratings_subidos": M}.
     """
     loc.ensure_sync_columns()
-    client = get_client()
+    client = get_privileged_client()
 
     equipo_local = team_repo.get_match_team(match_name)
     team_id_cloud = _get_or_create_team(client, equipo_local["team_name"]) if equipo_local else None
@@ -194,9 +218,13 @@ def sync_match(match_name: str) -> dict:
 
 
 def sync_all() -> dict:
-    """Sincroniza el plantel de todos los equipos y todos los partidos
-    con datos locales."""
-    resumen = {"plantel": sync_all_rosters()}
+    """Sincroniza el plantel de todos los equipos, los partidos de dos
+    tiempos, y todos los partidos con datos locales."""
+    client = get_privileged_client()
+    resumen = {
+        "plantel": sync_all_rosters(),
+        "partido_tiempos": sync_partido_tiempos(client),
+    }
     for match_name in loc.list_match_names():
         resumen[match_name] = sync_match(match_name)
     return resumen

@@ -164,6 +164,21 @@ create table if not exists player_ratings (
     unique (match_id, local_id)
 );
 
+-- ── Partidos de dos tiempos (espejo cloud de `partido_tiempos`) ──────────
+-- Cada tiempo se filma/procesa/calibra como un video propio y ya tiene su
+-- fila en `matches` (local_key = nombre del video). Esta tabla solo agrupa:
+-- qué dos filas de `matches` son el mismo partido. Ver
+-- src/db/partido_repo.py (local) y docs/pendiente_nico_medidas_cancha.md
+-- ("Partidos de dos tiempos") para el porqué de este diseño.
+create table if not exists match_halves (
+    id          uuid primary key default gen_random_uuid(),
+    partido     text not null,
+    tiempo      int not null check (tiempo in (1, 2)),
+    match_id    uuid references matches(id) on delete cascade,
+    created_at  timestamptz not null default now(),
+    unique (partido, tiempo)
+);
+
 -- ── Métricas tácticas agregadas (compacidad, ancho de bloque, etc.) ──────
 create table if not exists match_metrics (
     id                 uuid primary key default gen_random_uuid(),
@@ -179,3 +194,4 @@ create table if not exists match_metrics (
 create index if not exists idx_events_match_time on events (match_id, time_sec);
 create index if not exists idx_matches_team_date on matches (team_id, match_date);
 create index if not exists idx_ratings_match on player_ratings (match_id);
+create index if not exists idx_match_halves_partido on match_halves (partido);
