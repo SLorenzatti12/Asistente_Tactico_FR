@@ -42,7 +42,19 @@ def _verificar(info) -> str:
     return "  [coincide]" if sha256_archivo(ruta) == info["sha256"] else "  [NO COINCIDE: el archivo cambió]"
 
 
-def imprimir(meta: dict, nivel: int, verificar: bool) -> None:
+def _puntos(info: dict) -> str:
+    if info.get("archivo_puntos"):
+        return _archivo(info["archivo_puntos"])
+    origen = info.get("origen_puntos") or {}
+    if isinstance(origen, str):
+        return origen
+    if origen.get("tipo") == "propagada_desde_otro_video":
+        return (f"propagada desde {origen.get('video')} (frame {origen.get('frame')}, "
+                f"{origen.get('inliers')} coincidencias de registro)")
+    return origen.get("tipo") or "sin dato"
+
+
+def imprimir(meta: dict, nivel: int, verificar: bool, ruta_salida: str | None = None) -> None:
     sangria = "   " * nivel
     print(f"{sangria}▸ {meta.get('script')}  ({meta.get('fecha_utc')} UTC, commit {_git(meta)})")
     parametros = meta.get("parametros") or {}
@@ -57,7 +69,7 @@ def imprimir(meta: dict, nivel: int, verificar: bool) -> None:
         if clave == "calibracion":
             print(f"{sangria}  calibración: {_archivo(info['archivo'])}"
                   f"{_verificar(info['archivo']) if verificar else ''}")
-            print(f"{sangria}    puntos: {_archivo(info.get('archivo_puntos'))}"
+            print(f"{sangria}    puntos: {_puntos(info)}"
                   f"{_verificar(info.get('archivo_puntos')) if verificar else ''}")
             print(f"{sangria}    estadio: {info.get('estadio') or 'sin dato'} · control: {info.get('control_calidad')}"
                   f" · tramos: {len(info.get('tramos') or [])} · excluidos: "
@@ -71,9 +83,15 @@ def imprimir(meta: dict, nivel: int, verificar: bool) -> None:
         print(f"{sangria}  librerías: " + ", ".join(f"{k} {v}" for k, v in meta["versiones"].items() if v))
     origen = meta.get("origen")
     if origen:
-        print(f"{sangria}  entrada: {_archivo(origen['archivo'])}{_verificar(origen['archivo']) if verificar else ''}")
+        if origen["archivo"]["ruta"] == ruta_salida:
+            # Etapas que reescriben su entrada (team_assignment): el hash es el
+            # de la versión anterior del mismo archivo, que ya no existe.
+            nota = "  [es este mismo archivo antes de que esta etapa lo reescribiera]"
+        else:
+            nota = _verificar(origen["archivo"]) if verificar else ""
+        print(f"{sangria}  entrada: {_archivo(origen['archivo'])}{nota}")
         if origen.get("procedencia"):
-            imprimir(origen["procedencia"], nivel + 1, verificar)
+            imprimir(origen["procedencia"], nivel + 1, verificar, origen["archivo"]["ruta"])
         else:
             print(f"{sangria}     ⚠️  esa entrada no tiene procedencia (es anterior al registro): la cadena se corta acá")
 
@@ -98,7 +116,11 @@ def main() -> None:
         print(json.dumps(meta, indent=2, ensure_ascii=False))
         return
     print(f"Procedencia de {ruta.name} (de este archivo hacia el video original):\n")
-    imprimir(meta, 0, args.verificar)
+    try:
+        ruta_relativa = str(ruta.resolve().relative_to(ROOT))
+    except ValueError:
+        ruta_relativa = None
+    imprimir(meta, 0, args.verificar, ruta_relativa)
 
 
 if __name__ == "__main__":

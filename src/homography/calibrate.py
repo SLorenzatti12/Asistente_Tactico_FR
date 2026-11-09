@@ -1328,7 +1328,8 @@ def _procedencia_apply(coords_path, homography_path, calib, medidas, video_path,
         "archivo": info_archivo(homography_path, progreso=False),
         "archivo_puntos": (info_archivo(ruta_puntos, progreso=False) if ruta_puntos and ruta_puntos.is_file()
                            else archivo_puntos),
-        "origen_puntos": (calib.get("origen_puntos") or {}).get("tipo", "clics_manuales"),
+        "origen_puntos": {k: v for k, v in (calib.get("origen_puntos") or {"tipo": "clics_manuales"}).items()
+                          if k != "puntos"},
         "frame": calib.get("frame"),
         "estadio": medidas.get("estadio"),
         "medidas_cancha": medidas,
