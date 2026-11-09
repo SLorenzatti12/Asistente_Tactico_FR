@@ -40,6 +40,9 @@ from video_anotado import CLASS_COLORS, EscritorVideo, dibujar_cajas  # noqa: E4
 ROOT    = Path(__file__).resolve().parents[2]
 OUTPUTS = ROOT / "data" / "outputs"
 
+sys.path.insert(0, str(ROOT))
+from src.utils.procedencia import escribir_parquet_con_meta, info_archivo, meta_base  # noqa: E402
+
 # Cache persistente de pesos — evita que se pierdan al reiniciar la compu
 os.environ.setdefault("MODEL_CACHE_DIR", str(ROOT / "models" / "roboflow_cache"))
 
@@ -124,6 +127,19 @@ def run(video_path: Path, frame_skip: int = 2, api_key: str = None) -> Path:
 
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     stem = video_path.stem
+
+    # Procedencia: el hash del video de entrada, antes de procesarlo (ver
+    # src/utils/procedencia.py). Viaja en el parquet y en todos los que salen de él.
+    print(f"\n[0/4] Calculando el SHA-256 de {video_path.name}...")
+    meta = meta_base(__file__, {
+        "model_id": MODEL_ID,
+        "umbrales_confianza": dict(CONF_THRESHOLDS),
+        "umbral_confianza_otras_clases": DEFAULT_CONF,
+        "iou_supresion_goalkeeper_player": GOALKEEPER_OVERLAP_IOU,
+        "skip": frame_skip,
+    })
+    meta["video"] = info_archivo(video_path)
+    print(f"       {meta['video']['sha256']}")
 
     print(f"\n[1/4] Cargando modelo {MODEL_ID}...")
     print("       (primera vez: descarga y cachea los pesos localmente)")
@@ -230,7 +246,7 @@ def run(video_path: Path, frame_skip: int = 2, api_key: str = None) -> Path:
     if df.empty:
         print("[ADVERTENCIA] No se detectaron objetos.")
     else:
-        df.to_parquet(out_coords_path, index=False)
+        escribir_parquet_con_meta(df, out_coords_path, meta)
         _print_summary(df, out_video_path, out_coords_path)
 
     return out_coords_path

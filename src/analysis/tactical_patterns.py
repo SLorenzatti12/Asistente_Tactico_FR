@@ -1399,6 +1399,30 @@ def _imprimir_candidatos_fusion(candidatos: pd.DataFrame) -> None:
               f"{fila.distancia_m:.2f}m ({fila.velocidad_necesaria_ms:.2f} m/s necesarios)")
 
 
+def _guardar_patrones(patrones: pd.DataFrame, entrada: Path, destino: Path, ventana_fase: float) -> None:
+    """Guarda los momentos con su procedencia (ver src/utils/procedencia.py).
+    Los attrs del resultado (criterios, no evaluados, avisos, candidatos a
+    fusión) van a la metadata: la tabla de candidatos no se puede guardar como
+    attrs de pandas, que tienen que ser JSON."""
+    from src.utils.procedencia import escribir_parquet_con_meta, meta_base, meta_de_entrada
+    meta = meta_base(__file__, {"ventana_fase_seg": ventana_fase,
+                                "criterios": patrones.attrs.get("criterios"),
+                                "tramos_excluidos": patrones.attrs.get("tramos_excluidos")})
+    meta["resultado"] = {
+        "momentos": len(patrones),
+        "patrones_no_evaluados": patrones.attrs.get("patrones_no_evaluados", []),
+        "avisos": patrones.attrs.get("avisos", []),
+        "candidatos_fusion": len(patrones.attrs.get("candidatos_fusion", [])),
+    }
+    meta["origen"] = meta_de_entrada(entrada)
+    tabla = patrones.copy()
+    tabla.attrs = {}
+    tabla["evidencia_seg"] = tabla["evidencia_seg"].map(lambda ev: [[float(a), float(b)] for a, b in ev])
+    tabla["posible_mismo_jugador_que"] = tabla["posible_mismo_jugador_que"].map(lambda xs: [int(x) for x in xs])
+    escribir_parquet_con_meta(tabla, destino, meta)
+    print(f"\n✅ Momentos guardados en: {destino}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Analizador Táctico — Detección de patrones tácticos por jugador",
@@ -1413,6 +1437,9 @@ Ejemplo:
                              "(ver src/analysis/team_assignment.py)")
     parser.add_argument("--ventana-fase", type=float, default=VENTANA_FASE_SEG_DEFAULT,
                         help=f"Ventana (segundos) para detectar fases (default: {VENTANA_FASE_SEG_DEFAULT})")
+    parser.add_argument("--guardar", type=str, default=None,
+                        help="Ruta .parquet donde guardar los momentos, con su procedencia "
+                             "(default: <entrada>_patrones.parquet); 'no' para no guardar")
     args = parser.parse_args()
 
     ruta = Path(args.parquet)
@@ -1474,3 +1501,7 @@ Ejemplo:
         print("\n⚠️  Patrones no evaluados por falta de datos:")
         for msg in no_evaluados:
             print(f"  - {msg}")
+
+    if args.guardar != "no":
+        _guardar_patrones(patrones, ruta, Path(args.guardar) if args.guardar else
+                          ruta.with_name(f"{ruta.stem}_patrones.parquet"), args.ventana_fase)

@@ -724,7 +724,23 @@ Ejemplo:
         sys.exit(f"[ERROR] {e}")
 
     destino = Path(args.out) if args.out else parquet_path
-    resultado.to_parquet(destino, index=False)
+    # Procedencia (ver src/utils/procedencia.py): el video del que salen los
+    # colores, el otro tiempo usado como referencia y la cadena del parquet de
+    # entrada. Se arma antes de escribir, porque por defecto se pisa la entrada.
+    from src.utils.procedencia import escribir_parquet_con_meta, info_archivo, meta_base, meta_de_entrada
+    meta = meta_base(__file__, {
+        "muestras_por_track": args.muestras_por_track, "n_muestras": args.n_muestras,
+        "min_muestras_track": args.min_muestras_track, "pasto_adaptativo": not args.pasto_fijo,
+        "sin_referencia": args.sin_referencia, "proporcion_min_arquero": PROPORCION_MIN_ARQUERO,
+    })
+    meta["video"] = info_archivo(args.video)
+    meta["referencia_colores"] = None
+    if referencia:
+        ruta_ref = parquet_path.parent / f"{video_referencia}_coords_field.parquet"
+        meta["referencia_colores"] = {"video": video_referencia, "colores_rgb": referencia,
+                                      "parquet": info_archivo(ruta_ref, progreso=False) if ruta_ref.exists() else None}
+    meta["origen"] = meta_de_entrada(parquet_path)
+    escribir_parquet_con_meta(resultado, destino, meta)
 
     info = resultado.attrs.get("equipos_info", {})
     print(f"\n✅ Columna `team` guardada en: {destino.name}")

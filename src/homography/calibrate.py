@@ -1315,6 +1315,34 @@ def _avisar_si_cambio_estadio(match_name: str, medidas_calibracion: dict) -> Non
               f"calibración; para usar las nuevas, recalibrá.")
 
 
+def _procedencia_apply(coords_path, homography_path, calib, medidas, video_path, tramos_no_validos,
+                       n_total, n_fuera) -> dict:
+    """Procedencia de la salida de --apply (ver src/utils/procedencia.py): la
+    calibración usada (con su SHA-256 y el del archivo de puntos), el estadio,
+    los tramos válidos y excluidos, y la procedencia del parquet de entrada."""
+    from src.utils.procedencia import info_archivo, meta_base, meta_de_entrada
+    meta = meta_base(__file__, {"accion": "apply", "margen_fuera_de_cancha_m": OUT_OF_BOUNDS_MARGIN})
+    archivo_puntos = (calib.get("origen_puntos") or {}).get("archivo")
+    ruta_puntos = (ROOT / archivo_puntos) if archivo_puntos else None
+    meta["calibracion"] = {
+        "archivo": info_archivo(homography_path, progreso=False),
+        "archivo_puntos": (info_archivo(ruta_puntos, progreso=False) if ruta_puntos and ruta_puntos.is_file()
+                           else archivo_puntos),
+        "origen_puntos": (calib.get("origen_puntos") or {}).get("tipo", "clics_manuales"),
+        "frame": calib.get("frame"),
+        "estadio": medidas.get("estadio"),
+        "medidas_cancha": medidas,
+        "tramos": [{"desde": t["desde"], "hasta": t["hasta"]} for t in calib.get("tramos", [])],
+        "excluir": calib.get("excluir", []),
+        "tramos_no_validos": tramos_no_validos,
+        "control_calidad": (calib.get("control_calidad") or {}).get("veredicto"),
+    }
+    meta["video_calibrado"] = str(video_path) if video_path else None
+    meta["detecciones"] = {"entrada": int(n_total), "fuera_de_cancha": int(n_fuera)}
+    meta["origen"] = meta_de_entrada(coords_path)
+    return meta
+
+
 def apply_homography(coords_path: Path, homography_path: Path, video_path: Path | None = None) -> Path:
     """
     Aplica una calibración guardada a un .parquet de coordenadas en píxeles,
@@ -1404,7 +1432,8 @@ def apply_homography(coords_path: Path, homography_path: Path, video_path: Path 
             print("        Este porcentaje es alto — revisá la calibración, puede haber puntos mal marcados.")
 
     out_path = coords_path.parent / f"{coords_path.stem}_field.parquet"
-    df_filtered.to_parquet(out_path, index=False)
+    escribir_parquet_con_meta(df_filtered, out_path, _procedencia_apply(
+        coords_path, homography_path, calib, medidas, video_path, tramos_no_validos, n_total, n_out))
 
     print(f"\n✅ Coordenadas de cancha exportadas: {out_path.name}")
     print(f"   Nuevas columnas: field_x, field_y (metros, origen en esquina sup-izquierda)")

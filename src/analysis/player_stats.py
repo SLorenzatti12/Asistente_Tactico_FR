@@ -549,7 +549,7 @@ Ejemplos:
     parser.add_argument("--top", type=int, default=None,
                         help="Muestra solo los N tracks con más distancia recorrida")
     parser.add_argument("--guardar", type=str, default=None,
-                        help="Ruta .csv donde guardar la tabla de estadísticas")
+                        help="Ruta donde guardar la tabla de estadísticas: .parquet (con su procedencia) o .csv")
     args = parser.parse_args()
 
     ruta_parquet = Path(args.parquet)
@@ -594,5 +594,17 @@ Ejemplos:
     if args.guardar:
         destino = Path(args.guardar)
         destino.parent.mkdir(parents=True, exist_ok=True)
-        stats.to_csv(destino, index=False)
+        if destino.suffix == ".parquet":
+            # Con procedencia (ver src/utils/procedencia.py); el .csv no puede llevarla.
+            from src.utils.procedencia import escribir_parquet_con_meta, meta_base, meta_de_entrada
+            meta = meta_base(__file__, {
+                "min_frames": args.min_frames, "max_speed_ms": args.max_speed,
+                "suavizado": args.suavizado, "sin_filtro": args.sin_filtro,
+                "largo_cancha": medidas_de_df(df_crudo)["largo"],
+            })
+            meta["origen"] = meta_de_entrada(ruta_parquet)
+            escribir_parquet_con_meta(stats, destino, meta)
+        else:
+            stats.to_csv(destino, index=False)
+            print("   (el .csv no guarda la procedencia: para eso, --guardar con .parquet)")
         print(f"\n✅ Estadísticas guardadas en: {destino}")
