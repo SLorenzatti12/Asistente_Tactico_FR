@@ -2,6 +2,15 @@
 ultralytics>=8.2.0       # YOLOv8 + ByteTrack incluido
 opencv-python>=4.9.0     # captura y manipulación de video
 
+# Detección (RF-DETR de Roboflow) + tracking (ByteTrack) — versiones EXACTAS:
+# un cambio de versión acá mueve las cajas del detector ~1px y eso cambia los
+# IDs de tracking. Los cuatro van juntos; no actualizar uno solo. Línea base
+# de regresión con estas versiones: docs/context/decisiones.md
+inference==1.7.3
+inference-sdk==1.7.3
+inference-models==0.39.1  # el cambio de comportamiento del detector vive acá
+supervision==0.30.7       # ByteTrack (verificado idéntico a 0.29.1)
+
 # ── Datos ──────────────────────────────────────────────────
 pandas>=2.1.0
 pyarrow>=14.0.0          # formato .parquet para coordenadas

@@ -55,8 +55,13 @@ de distancia al centroide = 2.3". El número técnico va aparte, en la
 columna `valor_tecnico` — ahí si conviene ser preciso, para quien quiera
 auditar el número. Y ningún patrón se afirma como verdad absoluta: son
 señales estadísticas sobre datos con tracking fragmentado y homografía
-imperfecta, así que el wording usa siempre "posible"/"tendencia a", nunca
-una afirmación categórica.
+imperfecta. Cada caso se presenta como "Momento para revisar", con sus
+tramos de video, y NUNCA con un calificador de intensidad: hasta el
+16/10/2026 el texto decía "tendencia leve/moderada/marcada" según la
+severidad, y los 4 casos revisados contra video con severidad máxima
+("marcada") resultaron 3 falsos positivos y 1 desvío leve (ver
+decisiones.md, "Validación de tactical_patterns contra video"). La
+severidad queda solo para ORDENAR la lista y como dato técnico.
 
 LIMITACIÓN CONOCIDA — dirección de ataque depende del arquero
 ------------------------------------------------------------------
@@ -135,6 +140,28 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 from src.analysis.player_stats import MAX_SPEED_MS  # noqa: E402
+# Mismo criterio de "quién es arquero" que la asignación de equipos: un track
+# es arquero si la MAYORÍA de sus filas son `goalkeeper` (el detector confunde
+# jugador/arquero en detecciones sueltas).
+from src.analysis.team_assignment import tracks_arquero  # noqa: E402
+# Las filas de tramos sin calibración válida (cámara movida) no entran en
+# fases, líneas ni candidatos a fusión: ahí los metros están corridos.
+from src.homography.tramos_validos import filtrar_tramos_no_validos  # noqa: E402
+# Un video = un tiempo: si los equipos cambian de lado a mitad del video, no
+# hay UNA dirección de ataque — se frena en vez de calcular algo mezclado.
+from src.analysis.lados import (  # noqa: E402
+    control_entre_tiempos, detectar_cambio_de_lado, mensaje_cambio_de_lado,
+)
+
+
+class CambioDeLadoError(ValueError):
+    """El video tiene a los equipos de los dos lados (probablemente los dos tiempos)."""
+
+
+def _frenar_si_cambia_de_lado(df: pd.DataFrame) -> None:
+    cambio = detectar_cambio_de_lado(df)
+    if cambio is not None:
+        raise CambioDeLadoError(mensaje_cambio_de_lado(cambio))
 
 # ── Fases de juego ───────────────────────────────────────────
 # Ventana por defecto para medir la tendencia del centroide (segundos).
@@ -428,15 +455,6 @@ def _segmentos_contiguos(frames, tiempos, mascara, min_duracion_seg: float) -> l
     return segmentos
 
 
-def _calificador(severidad: float) -> str:
-    """Traduce una severidad [0,1] a un adjetivo de lectura futbolística."""
-    if severidad >= 0.66:
-        return "marcada"
-    if severidad >= 0.33:
-        return "moderada"
-    return "leve"
-
-
 def _formatear_evidencia(segmentos: list, maximo: int = 3) -> str:
     """Los primeros `maximo` segmentos como texto 'mm:ss-mm:ss', para el CLI."""
     def mmss(seg):
@@ -476,6 +494,8 @@ def detectar_fases(df: pd.DataFrame, ventana_seg: float = VENTANA_FASE_SEG_DEFAU
         no viene vacío.
     """
     _validar_columnas(df, {"frame", "time_sec", "class_name", "team", "field_x"}, "detectar_fases")
+    df = filtrar_tramos_no_validos(df)
+    _frenar_si_cambia_de_lado(df)
 
     columnas_salida = ["frame", "time_sec", "team", "centroide_x", "fase"]
     vacio = pd.DataFrame(columns=columnas_salida)
@@ -566,7 +586,11 @@ def asignar_lineas(df: pd.DataFrame) -> pd.DataFrame:
 
     Los arqueros quedan afuera de esta clasificación a propósito (no son
     una "línea" en este esquema); sus filas quedan con línea NaN, igual
-    que árbitro y pelota.
+    que árbitro y pelota. "Arquero" es el TRACK mayormente `goalkeeper`
+    (team_assignment.tracks_arquero), no la fila: en sportivo_crop3 el
+    arquero de Crecer tenía 311 de sus 886 filas como `player`, y esas filas
+    entraban en la línea defensiva — salía reportado "no achica" por no
+    acompañar las subidas, que es justamente lo que hace un arquero.
 
     Args:
         df: detecciones con frame, track_id, class_name, team, field_x.
@@ -580,6 +604,8 @@ def asignar_lineas(df: pd.DataFrame) -> pd.DataFrame:
         LIMITACIÓN CONOCIDA en el docstring del módulo.
     """
     _validar_columnas(df, {"frame", "track_id", "class_name", "team", "field_x"}, "asignar_lineas")
+    df = filtrar_tramos_no_validos(df)
+    _frenar_si_cambia_de_lado(df)
 
     resultado = df.copy()
     resultado["linea"] = pd.Series([pd.NA] * len(resultado), index=resultado.index, dtype=object)
@@ -595,6 +621,7 @@ def asignar_lineas(df: pd.DataFrame) -> pd.DataFrame:
         (resultado["class_name"] == "player")
         & resultado["team"].notna()
         & resultado["team"].isin(direccion.keys())
+        & ~resultado["track_id"].isin(tracks_arquero(resultado))
     ]
     if jugadores.empty:
         return resultado
@@ -737,7 +764,6 @@ def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
                 continue
 
             severidad = float(np.clip(exceso_relativo / UMBRAL_SEVERIDAD_MAX_DESCONEXION, 0.0, 1.0))
-            calif = _calificador(severidad)
             filas.append({
                 "track_id": track_id,
                 "team": team,
@@ -747,11 +773,12 @@ def _detectar_desconectado(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
                 "n_ocurrencias": len(segmentos),
                 "evidencia_seg": segmentos,
                 "descripcion": (
-                    f"Tendencia {calif} a despegarse en profundidad del resto de su línea "
-                    f"de forma sostenida ({proporcion_desviado:.0%} del tiempo en cancha) "
-                    f"— posible desconexión del bloque. Revisar en video: puede ser un "
-                    f"problema real o un movimiento correcto (desmarque, marca personal) "
-                    f"que este análisis no puede distinguir por sí solo."
+                    f"Momento para revisar. Durante buena parte de su tiempo en cancha "
+                    f"({proporcion_desviado:.0%}), este jugador estuvo más despegado de su "
+                    f"línea, en profundidad, que el resto de sus compañeros de línea. Puede "
+                    f"ser una desconexión del bloque o un movimiento correcto (desmarque, "
+                    f"marca personal): el análisis no distingue entre las dos cosas. Mirá "
+                    f"los tramos marcados."
                 ),
             })
 
@@ -847,7 +874,6 @@ def _detectar_no_achica(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
             segmentos = [(a, b) for a, b, _ in ocurrencias]
             deficit_prom = float(np.mean([d for _, _, d in ocurrencias]))
             severidad = float(np.clip(deficit_prom / UMBRAL_SEVERIDAD_MAX_NO_ACHICA_M, 0.0, 1.0))
-            calif = _calificador(severidad)
             filas.append({
                 "track_id": track_id,
                 "team": team,
@@ -857,11 +883,11 @@ def _detectar_no_achica(lineas: pd.DataFrame, fases: pd.DataFrame) -> tuple:
                 "n_ocurrencias": len(ocurrencias),
                 "evidencia_seg": segmentos,
                 "descripcion": (
-                    f"Tendencia {calif} a no acompañar el avance de su línea cuando "
-                    f"el equipo sube — posible falta de achique. Se repite en "
-                    f"{len(ocurrencias)} de las {total_fases} subidas evaluadas "
-                    f"— revisar en video antes de concluir nada, puede ser "
-                    f"basculación normal del equipo."
+                    f"Momento para revisar. Cuando el equipo subió, este jugador quedó "
+                    f"atrás del avance de su línea en {len(ocurrencias)} de las "
+                    f"{total_fases} subidas evaluadas. Puede ser falta de achique o "
+                    f"basculación normal del equipo: el análisis no distingue entre las "
+                    f"dos cosas. Mirá los tramos marcados."
                 ),
             })
 
@@ -921,6 +947,7 @@ def detectar_candidatos_fusion(df: pd.DataFrame, max_gap_seg: float = MAX_GAP_FU
         "gap_seg", "distancia_m", "velocidad_necesaria_ms",
     ]
     vacio = pd.DataFrame(columns=columnas_salida)
+    df = filtrar_tramos_no_validos(df)
     if df.empty:
         return vacio
 
@@ -1163,12 +1190,15 @@ def _imprimir_patrones(patrones: pd.DataFrame) -> None:
     if patrones.empty:
         return
 
+    # Ya vienen ordenados por severidad (detectar_patrones): la severidad
+    # ordena la lista y va en la línea técnica, nunca en el texto para el DT.
     for _, fila in patrones.iterrows():
-        print(f"\n● track {fila.track_id} ({fila.team}) — {fila.patron}  "
-              f"[severidad {fila.severidad:.2f}, {len(fila.evidencia_seg)} ocurrencia(s)]")
+        print(f"\n● Para revisar — track {fila.track_id} ({fila.team}), {fila.patron} "
+              f"· {len(fila.evidencia_seg)} tramo(s)")
         print(f"  {fila.descripcion}")
-        print(f"  técnico: valor_tecnico={fila.valor_tecnico}")
-        print(f"  evidencia: {_formatear_evidencia(fila.evidencia_seg)}")
+        print(f"  tramos: {_formatear_evidencia(fila.evidencia_seg)}")
+        print(f"  técnico: severidad {fila.severidad:.2f} (solo ordena la lista) · "
+              f"valor_tecnico={fila.valor_tecnico}")
         if fila.posible_mismo_jugador_que:
             tracks = ", ".join(str(t) for t in fila.posible_mismo_jugador_que)
             print(f"  ⚠️  posible el mismo jugador que track(s): {tracks} "
@@ -1216,7 +1246,19 @@ Ejemplo:
     print(f"\n🧭 Patrones tácticos — {ruta.name}")
     print("=" * 78)
 
-    fases = detectar_fases(df, ventana_seg=args.ventana_fase)
+    # Segundo tiempo de un partido: los equipos tienen que haber cambiado de lado.
+    control = control_entre_tiempos(ruta.stem.replace("_coords_field", ""), df, ruta.parent)
+    if control is not None:
+        icono = "✅" if control["ok"] else "⚠️ "
+        print(f"{icono} {control['tiempo_actual']}° tiempo de \"{control['partido']}\" "
+              f"(el otro: {control['otro_video']}): {control['motivo']}.")
+        if not control["ok"] and control["tiempo_actual"] == 2:
+            sys.exit("No se calculan patrones de este tiempo hasta resolverlo.")
+
+    try:
+        fases = detectar_fases(df, ventana_seg=args.ventana_fase)
+    except CambioDeLadoError as e:
+        sys.exit(f"[ERROR] {e}")
     print(f"Fases detectadas: {len(fases)} (frame, equipo) evaluados")
     if not fases.empty:
         print(fases["fase"].value_counts().to_string())
@@ -1237,7 +1279,7 @@ Ejemplo:
     if patrones.empty:
         _imprimir_resumen_sin_patrones(fases)
     else:
-        print("Patrones detectados:")
+        print(f"Momentos para revisar ({len(patrones)}), ordenados de más a menos señal:")
         _imprimir_patrones(patrones)
 
     print("\n" + "=" * 78)

@@ -43,6 +43,7 @@ la entrada correspondiente en `decisiones.md`.
 |---|---|
 | `teams`, `match_team` (equipo/categoría asignado a cada partido — ver `src/db/team_repo.py`) | `clubs`, `users`, `teams`, `players` |
 | `roster` (plantel por equipo, alta/baja desde la app — ver `src/db/roster_repo.py`) | `matches` (calendario/resultados), `match_videos`, `calibrations`, `tracking_outputs` (solo la ruta al parquet) |
+| `estadios`, `match_estadio` (medidas de cancha por estadio y dónde se jugó cada partido — ver `src/db/estadio_repo.py`; todavía no se sincronizan) | |
 | `match_videos` (ruta local del video de cada partido — ver `src/db/video_repo.py`) | Copias sincronizadas de `events` y `player_ratings`, para consulta remota |
 | `events`, `event_types`, `semaforo` (tal cual las creó/evoluciona `tagging.py`) | Video subido a Supabase **Storage**, bucket privado `match-videos` |
 | Tracking (`.parquet` en `data/outputs/`) y calibración (`data/calibracion/`) | — |
@@ -80,12 +81,14 @@ src/db/
   team_repo.py                # equipos/categorías y qué equipo jugó cada partido
   roster_repo.py              # plantel por equipo (alta/baja)
   video_repo.py                # ruta local del video de cada partido
+  estadio_repo.py              # medidas de cancha por estadio y estadio de cada partido (solo local)
   sync.py                    # lógica de sync (roster, video, sync_match, sync_all)
 app/components/
   team_selector.py            # UI: elegir/crear el equipo de un partido
   roster_view.py               # UI: alta/baja de jugadores del plantel
   video_registry.py            # UI: registrar la ruta local del video
 scripts/sync_to_cloud.py     # CLI del punto anterior
+scripts/estadios.py          # alta/listado de estadios y asignación a partidos
 .env.example                 # template de credenciales (nunca commitear .env real)
 ```
 

@@ -33,7 +33,7 @@ una sección de **Criterios de Aceptación** con este formato:
 | Tipo de tarjeta | Cómo se prueba |
 |---|---|
 | Módulo de detección/tracking (`run_inference.py`) | Correr sobre 2 videos distintos, confirmar rango razonable de IDs y detecciones por clase esperadas |
-| Homografía (`calibrate.py`) | Confirmar % de detecciones fuera de cancha < 10%; revisar visualmente que los puntos calibrados caigan en el lugar correcto |
+| Homografía (`calibrate.py`) | El control por superposición (automático al calibrar, o `--verificar`) debe dar **OK**, y hay que **mirar la imagen** `*_calibracion_control.png`: las líneas proyectadas tienen que caer sobre las pintadas. Para video con paneo, correr `--verificar --frame N` en frames distribuidos. *Ya no se usa "% fuera de cancha < 10%" como criterio:* calibraciones con errores de varios metros lo pasaban igual (ver `docs/context/decisiones.md`). Que los puntos clickeados caigan bien tampoco alcanza: la homografía coincide con ellos por construcción |
 | Componente de dashboard (Streamlit) | Probar con datos reales (no solo placeholder), confirmar que no rompe si faltan columnas o el archivo no existe |
 | Persistencia (SQLite) | Insertar un dato de prueba, cerrar y reabrir la app, confirmar que persiste |
 | Fix de bug | Reproducir el bug original antes del fix (para confirmar que existía) y después (para confirmar que se resolvió) |

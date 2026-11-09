@@ -51,9 +51,25 @@ python scripts/download_video.py "<url>" --start 00:05:00 --duration 00:10:00
 export ROBOFLOW_API_KEY="..."
 python src/detection/run_inference.py data/videos/<clip>.mp4
 
-# 2. Homografía: calibrar (una vez por cámara/ángulo) y aplicar
-python src/homography/calibrate.py data/videos/<clip>.mp4
+# 2. Homografía: calibrar (una vez por cámara/ángulo) y aplicar.
+#    Las medidas de la cancha son por estadio (default 105×68): cargarlo una vez
+#    y pasarlo al calibrar — quedan copiadas en la calibración y en el parquet.
+python scripts/estadios.py alta "<estadio>" --largo <m> --ancho <m>
+python src/homography/calibrate.py data/videos/<clip>.mp4 --estadio "<estadio>"
+#    (o, con puntos medidos sobre la imagen en vez de clics:
+#     --puntos-archivo data/calibracion/<clip>_puntos_f<N>.json)
 python src/homography/calibrate.py data/videos/<clip>.mp4 --apply data/outputs/<clip>_coords.parquet
+
+# Rehacer el video anotado (H.264, cajas en todos los frames) desde el parquet, sin el detector
+python scripts/regenerar_video_anotado.py data/videos/<clip>.mp4 data/outputs/<clip>_coords.parquet
+
+# Partido de dos tiempos: un video por tiempo, cada uno procesado por separado
+# (su parquet, calibración, dirección de ataque y equipos). Si llegó un solo
+# archivo con todo, cortarlo primero (no se detecta el entretiempo solo):
+python scripts/cortar_video.py data/videos/<partido>.mp4 --en 47:30   # → <partido>_t1.mp4 / _t2.mp4
+python scripts/partidos.py alta "<partido>" --t1 <video_t1> --t2 <video_t2> --estadio "<estadio>"
+#    Calibración del 2° tiempo propagada desde la del 1° (avisa si la cámara se movió):
+python src/homography/calibrate.py data/videos/<video_t2>.mp4 --desde-calibracion data/videos/<video_t1>.mp4
 ```
 
 Sync manual a la nube (Supabase) — solo con internet, nunca requerido en cancha; ver `8-base-de-datos-hibrida.md` para el setup (proyecto Supabase, `db/schema_cloud.sql`, bucket privado `match-videos`, `.env` a partir de `.env.example`):
@@ -65,10 +81,10 @@ python scripts/sync_to_cloud.py <match_name>
 
 ## Arquitectura del dashboard (`app/`)
 
-`app/main.py` es el único entry point real (Santi) y actúa de orquestador: mantiene `st.session_state`, resuelve qué partido está seleccionado (`match_selector()`, busca `*_field.parquet` en `data/outputs/`) y monta en el layout las funciones que exponen los módulos de `app/components/` — cada componente es dueño de su propia lógica y estado, `main.py` no la duplica:
+`app/main.py` es el único entry point real (Santi) y actúa de orquestador: mantiene `st.session_state`, resuelve qué partido está seleccionado (`match_selector()`, busca `*_field.parquet` en `data/outputs/` y agrupa los dos tiempos de un partido registrado en `partido_tiempos`, con un selector de tiempo) y monta en el layout las funciones que exponen los módulos de `app/components/` — cada componente es dueño de su propia lógica y estado, `main.py` no la duplica:
 
 - `map_view.py` — mapa 2D (Plotly) + panel de métricas tácticas, a partir del DataFrame `frame, time_sec, track_id, class_name, field_x, field_y[, team]`.
-- `video_sync.py` — reproductor de video custom (Custom Component v2) que expone `video.currentTime` a Python; reemplaza a `st.video()` porque ese no permite leer en qué segundo va la reproducción. Sirve el archivo vía un hardlink autogenerado en `app/static/` (gitignorado, no tocar a mano).
+- `video_sync.py` — reproductor de video custom (Custom Component v2) que expone `video.currentTime` a Python; reemplaza a `st.video()` porque ese no permite leer en qué segundo va la reproducción. Videos de hasta 200 MB: hardlink autogenerado en `app/static/` (gitignorado, no tocar a mano; ahí queda solo el del partido abierto). Más grandes: un servidor local con *range requests* que arranca solo con el dashboard (Streamlit no sirve estáticos de más de 200 MB, y desactiva todos si `app/static/` pasa 1 GB).
 - `tagging.py` — botonera de tagueo one-click, eventos, y el tab de Semáforo post-partido. Dueño de `data/db/analizador.sqlite` (`init_db()`, tablas `events`/`event_types`/`semaforo`).
 - `player_stats_view.py` — estadísticas individuales, sobre `src/analysis/player_stats.py`.
 - `team_selector.py`, `roster_view.py`, `video_registry.py` — capa de base de datos híbrida (ver abajo).
@@ -79,9 +95,10 @@ python scripts/sync_to_cloud.py <match_name>
 Etapas independientes que se corren por CLI, no importadas por el dashboard en tiempo real (ver comandos arriba):
 
 - `src/detection/run_inference.py` — modelo propio en Roboflow (RF-DETR Small, `player`/`goalkeeper`/`referee`/`ball`) vía paquete `inference`, tracking con `supervision.ByteTrack()`. Exporta video anotado + `*_coords.parquet`.
-- `src/homography/calibrate.py` — calibración manual de 4 puntos por cámara; transforma píxeles a metros reales (cancha 105×68 m, origen en el centro). Exporta `*_coords_field.parquet`, el formato que consume todo lo demás.
-- `src/analysis/team_assignment.py` — infiere equipo (`home`/`away`) por color de camiseta (KMeans sobre el torso).
+- `src/homography/calibrate.py` — calibración manual de 4 puntos por cámara; transforma píxeles a metros reales (origen (0,0) en la esquina superior izquierda: `field_x` 0–largo arco a arco, `field_y` 0–ancho lateral a lateral). Las medidas de la cancha salen del estadio (`--estadio`, default 105×68 reglamentaria), se copian al JSON de la calibración y viajan en el parquet como `df.attrs["medidas_cancha"]` — leerlas con `medidas_de_df()` de `src/homography/medidas_cancha.py`. Exporta `*_coords_field.parquet`, el formato que consume todo lo demás.
+- `src/analysis/team_assignment.py` — infiere equipo (`home`/`away`) por color de camiseta (KMeans sobre el torso), con muestras por track y el pasto estimado del propio video; los tracks mayormente `goalkeeper` van por geometría.
 - `src/analysis/tactical_patterns.py` — fases de bloque (avanza/repliega) y líneas por jugador. Sin detección de posesión confiable (recall bajo de la clase `ball`) — no confundir "fase" con ataque/defensa por posesión.
+- `src/analysis/lados.py` — de qué lado juega cada equipo: frena `tactical_patterns` si un video tiene los dos tiempos juntos, y verifica que los equipos cambien de lado entre el 1° y el 2° tiempo.
 - `src/analysis/player_stats.py` — estadísticas por `track_id` a partir del parquet en metros.
 
 El `.parquet` es el contrato entre etapas: se mantiene estable entre versiones del modelo de detección para no romper el resto del pipeline.
@@ -93,6 +110,8 @@ SQLite local (`data/db/analizador.sqlite`) es la única base durante el procesam
 Piezas locales (`src/db/`), cada una dueña de su propia tabla en el mismo archivo SQLite:
 
 - `team_repo.py` — equipos/categorías (soporta más de un plantel, ej. Primera/Reserva) y qué equipo jugó cada partido (`match_team`).
+- `estadio_repo.py` — estadios con las medidas de su cancha (`estadios`) y en cuál se jugó cada partido (`match_estadio`). Alta/listado/asignación con `scripts/estadios.py`; lo consume `calibrate.py --estadio`.
+- `partido_repo.py` — agrupa los dos videos (uno por tiempo) de un partido (`partido_tiempos`). Alta con `scripts/partidos.py`, que copia equipo y estadio a los dos tiempos. Solo local por ahora.
 - `roster_repo.py` — plantel de jugadores **por equipo**, cargado una sola vez y reutilizado en todos sus partidos (no por partido). Baja = `DELETE` físico, a propósito (no hay soft delete).
 - `video_repo.py` — ruta local del video crudo de cada partido, y si ya se subió.
 - `local.py` — helpers de solo-lectura sobre `events`/`semaforo` (tablas de `tagging.py`) para el sync.

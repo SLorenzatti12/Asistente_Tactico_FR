@@ -35,6 +35,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from src.homography.tramos_validos import filtrar_tramos_no_validos  # noqa: E402
+
 # ── Dimensiones estándar de cancha (metros) ────────────────
 FIELD_LENGTH = 105.0
 FIELD_WIDTH  = 68.0
@@ -67,6 +72,12 @@ _VENTANA_POSICION = 5
 # instantáneas antes de tomar el máximo. A 30 fps un pico de 1-2 frames es
 # ruido de detección, no un sprint.
 _VENTANA_SUAVIZADO = 5
+
+# Duración mínima (segundos vistos) para reportar velocidad_max de un track.
+# En un track corto el pico es casi todo ruido: en sportivo_crop3 un track de
+# 1.4 s en la banda lejana (donde 1 px de alto son ~0.3 m) daba 14.97 m/s
+# (54 km/h). Más cortos que esto → velocidad_max NaN ("no medida"), no 0.
+MIN_DURACION_VMAX_SEG = 5.0
 
 # Columnas que devuelve compute_player_stats, en orden.
 COLUMNAS_STATS = [
@@ -212,6 +223,8 @@ def filter_noise(
     Limpia el DataFrame de detecciones antes de calcular métricas.
 
     Descarta, en este orden:
+      0. Filas de tramos del video sin calibración válida (cámara movida;
+         ver src/homography/tramos_validos.py): ahí los metros están corridos.
       1. Filas sin coordenadas de cancha válidas y detecciones duplicadas.
       2. Saltos de posición que implicarían velocidades imposibles
          (> `max_speed_ms` m/s): glitches de homografía o cruces de identidad.
@@ -233,6 +246,7 @@ def filter_noise(
     if df is None or df.empty:
         return df if df is not None else pd.DataFrame()
 
+    df = filtrar_tramos_no_validos(df)
     limpio = _preparar(df)
     if limpio.empty:
         return limpio
@@ -286,12 +300,14 @@ def compute_player_stats(
         distancia_total_m    — suma de distancias entre posiciones consecutivas
         pos_promedio_x/y     — posición media sobre la cancha (metros)
         rango_x/y            — amplitud de movimiento (max - min) por eje
-        velocidad_max_ms     — velocidad máxima (m/s), suavizada con mediana móvil
+        velocidad_max_ms     — velocidad máxima (m/s), suavizada con mediana móvil;
+                               NaN si el track duró menos de MIN_DURACION_VMAX_SEG
         velocidad_prom_ms    — distancia total / tiempo en cancha (m/s)
 
     Casos borde:
         - DataFrame vacío o sin jugadores → DataFrame vacío con estas columnas.
-        - Track con una sola detección → distancia, rangos y velocidades en 0.0.
+        - Track con una sola detección → distancia, rangos y velocidad promedio en 0.0;
+          velocidad_max NaN (igual que todo track de menos de MIN_DURACION_VMAX_SEG).
         - Filas con NaN en field_x / field_y / time_sec → se ignoran.
 
     Args:
@@ -342,7 +358,7 @@ def compute_player_stats(
                 "pos_promedio_y": float(ys[0]),
                 "rango_x": 0.0,
                 "rango_y": 0.0,
-                "velocidad_max_ms": 0.0,
+                "velocidad_max_ms": np.nan,
                 "velocidad_prom_ms": 0.0,
             })
             continue
@@ -363,6 +379,8 @@ def compute_player_stats(
             velocidad_max = float(np.nanmax(suavizada.to_numpy()))
         else:
             velocidad_max = 0.0
+        if tiempo < MIN_DURACION_VMAX_SEG:
+            velocidad_max = np.nan
 
         velocidad_prom = distancia_total / tiempo if tiempo > 0 else 0.0
 
@@ -491,7 +509,8 @@ def _resumen(df_crudo: pd.DataFrame, df_limpio: pd.DataFrame, stats: pd.DataFram
         lineas.append(
             f"Distancia media por track: {stats['distancia_total_m'].mean():.1f} m  |  "
             f"pico de velocidad: {stats['velocidad_max_ms'].max():.2f} m/s "
-            f"({stats['velocidad_max_ms'].max() * 3.6:.1f} km/h)"
+            f"({stats['velocidad_max_ms'].max() * 3.6:.1f} km/h, solo tracks de "
+            f"≥{MIN_DURACION_VMAX_SEG:g} s)"
         )
     if "zona" in stats.columns and not stats.empty:
         conteo = stats["zona"].value_counts().reindex(ZONAS, fill_value=0)
@@ -551,8 +570,15 @@ Ejemplos:
         except ValueError as e:
             sys.exit(f"[ERROR] {e}")
 
+    # Tercios sobre el largo REAL de la cancha (metadata que deja calibrate.py
+    # --apply; sin ella, 105 m — ver src/homography/medidas_cancha.py).
+    _ROOT = Path(__file__).resolve().parents[2]
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    from src.homography.medidas_cancha import medidas_de_df
     stats = infer_formation_zones(
-        compute_player_stats(df_limpio, ventana_suavizado=args.suavizado)
+        compute_player_stats(df_limpio, ventana_suavizado=args.suavizado),
+        largo_cancha=medidas_de_df(df_crudo)["largo"],
     )
 
     print(f"\n📊 Estadísticas por jugador — {ruta_parquet.name}")

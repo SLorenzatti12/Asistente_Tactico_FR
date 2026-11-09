@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Analizador Táctico — Mockup de Alta Fidelidad</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- ============================================================== -->
+  <!-- BARRA SUPERIOR (HEADER ESTILO BROADCAST & SCOREBOARD)          -->
+  <!-- ============================================================== -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand-badge">
+        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path>
+          <path d="M2 12h20"></path>
+        </svg>
+        <div>
+          <h1 class="brand-title">ANALIZADOR TÁCTICO</h1>
+          <span class="brand-sub">LIGA DE SAN FRANCISCO · MESA DE ANÁLISIS POST-PARTIDO</span>
+        </div>
+      </div>
+
+      <div class="match-info-pill">
+        <span class="team-badge local">🔵 SPORTIVO BELGRANO (2)</span>
+        <span class="match-vs">vs</span>
+        <span class="team-badge away">🔴 ALUMNI (1)</span>
+        <span class="match-meta">Fecha 12 · 90' Completo</span>
+      </div>
+    </div>
+
+    <!-- Píldoras de Navegación de Vistas -->
+    <nav class="view-nav">
+      <button class="nav-btn active" data-view="tactica">
+        <span class="nav-icon">📹</span>
+        <span class="nav-text">Mesa Táctica</span>
+        <span class="live-dot"></span>
+      </button>
+      <button class="nav-btn" data-view="jugadores">
+        <span class="nav-icon">🏃</span>
+        <span class="nav-text">Rendimiento Individual</span>
+      </button>
+      <button class="nav-btn" data-view="patrones">
+        <span class="nav-icon">⚠️</span>
+        <span class="nav-text">Patrones Detectados</span>
+        <span class="nav-badge alert">5</span>
+      </button>
+      <button class="nav-btn" data-view="semaforo">
+        <span class="nav-icon">🚦</span>
+        <span class="nav-text">Semáforo DT</span>
+        <span class="nav-badge count">14</span>
+      </button>
+    </nav>
+
+    <div class="header-right">
+      <div class="time-readout">
+        <span class="time-label">TIEMPO VIDEO</span>
+        <span class="time-value" id="headerClock">14:20.0</span>
+      </div>
+      <button class="action-btn-accent" id="btnQuickReport" title="Exportar informe listo para el cuerpo técnico">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+        <span>Informe DT</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ============================================================== -->
+  <!-- VISTA 1: MESA TÁCTICA (VIDEO + CANCHA 2D + MÉTRICAS + TAGUEO)  -->
+  <!-- ============================================================== -->
+  <main class="view-container active" id="viewTactica">
+    <div class="tactica-layout">
+      <!-- Columna Principal Izquierda: Reproductores y Cancha -->
+      <section class="tactica-main-col">
+        <!-- Barra de selector de visualización en vivo -->
+        <div class="workspace-toolbar">
+          <div class="view-mode-selector">
+            <span class="toolbar-label">MODO VISOR:</span>
+            <button class="mode-btn active" data-mode="split">Dividido (Video + Cancha)</button>
+            <button class="mode-btn" data-mode="pitch">Solo Cancha 2D (Cenital)</button>
+            <button class="mode-btn" data-mode="video">Solo Video Anotado</button>
+          </div>
+
+          <div class="pitch-toggles">
+            <label class="toggle-control" title="Mostrar envolvente convexa del bloque de cada equipo">
+              <input type="checkbox" id="chkShowHull" checked>
+              <span class="toggle-slider"></span>
+              <span class="toggle-text">Bloques (Hull)</span>
+            </label>
+            <label class="toggle-control" title="Mostrar centroides y líneas de repliegue">
+              <input type="checkbox" id="chkShowCentroid" checked>
+              <span class="toggle-slider"></span>
+              <span class="toggle-text">Centroides</span>
+            </label>
+            <label class="toggle-control" title="Mostrar vectores de velocidad y dirección">
+              <input type="checkbox" id="chkShowVectors" checked>
+              <span class="toggle-slider"></span>
+              <span class="toggle-text">Vectores</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Área de pantallas (Split / Single) -->
+        <div class="screens-grid split" id="screensWrapper">
+          <!-- Pantalla 1: Video Simulado con Inferencia y Bounding Boxes -->
+          <div class="screen-panel video-panel" id="panelVideo">
+            <div class="panel-header">
+              <span class="panel-tag">CÁMARA TÁCTICA (PANORÁMICA FIJA)</span>
+              <div class="panel-legend">
+                <span class="legend-pill bbox-home">Local [Track RF-DETR]</span>
+                <span class="legend-pill bbox-away">Visitante</span>
+                <span class="legend-pill bbox-ball">Pelota</span>
+              </div>
+            </div>
+            <div class="canvas-holder">
+              <canvas id="videoCanvas" width="760" height="428"></canvas>
+              <div class="video-overlay-hud">
+                <span class="hud-pill">FPS: 30.0 (ByteTrack v2)</span>
+                <span class="hud-pill" id="hudTrackCount">18 tracks activos</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pantalla 2: Cancha 2D Cenital (105m x 68m) -->
+          <div class="screen-panel pitch-panel" id="panelPitch">
+            <div class="panel-header">
+              <span class="panel-tag">CANCHA CENITAL 105 × 68 m</span>
+              <div class="panel-legend">
+                <span class="legend-pill local-dot">● Local (4-3-3)</span>
+                <span class="legend-pill away-dot">● Visitante (4-4-2)</span>
+                <span class="legend-pill ball-dot">⚪ Balón</span>
+              </div>
+            </div>
+            <div class="canvas-holder">
+              <canvas id="pitchCanvas" width="760" height="492"></canvas>
+              <!-- Marcadores de orientación de ataque -->
+              <div class="pitch-direction-guide">
+                <span class="attack-arrow local">Ataque Local ➜</span>
+                <span class="attack-arrow away">🠔 Ataque Visitante</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Barra de Transporte & Scrubbing Sincronizado a 60fps -->
+        <div class="timeline-controls-card">
+          <div class="playback-controls">
+            <button class="transport-btn" id="btnStepBack" title="Paso atrás (-0.5s)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"></path></svg>
+            </button>
+            <button class="transport-btn play-btn" id="btnPlayPause" title="Reproducir / Pausar (Espacio)">
+              <svg id="iconPlay" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              <svg id="iconPause" class="hidden" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+            </button>
+            <button class="transport-btn" id="btnStepForward" title="Paso adelante (+0.5s)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"></path></svg>
+            </button>
+
+            <div class="speed-selector">
+              <button class="speed-btn" data-speed="0.5">0.5x</button>
+              <button class="speed-btn active" data-speed="1.0">1.0x</button>
+              <button class="speed-btn" data-speed="2.0">2.0x</button>
+            </div>
+
+            <div class="scrubber-time-display">
+              <span id="currentTimeDisplay">14:20.0</span>
+              <span class="time-sep">/</span>
+              <span id="totalTimeDisplay">45:00.0</span>
+            </div>
+          </div>
+
+          <!-- Barra de Tiempo con Marcas de Eventos Tagueados y Alertas -->
+          <div class="scrubber-bar-container">
+            <div class="scrubber-track" id="scrubberTrack">
+              <div class="scrubber-progress" id="scrubberProgress" style="width: 31.8%;"></div>
+              <div class="scrubber-playhead" id="scrubberPlayhead" style="left: 31.8%;"></div>
+              <!-- Los marcadores de eventos se inyectan dinámicamente con JS -->
+              <div class="timeline-markers" id="timelineMarkers"></div>
+            </div>
+            <div class="scrubber-meta-row">
+              <span>00:00</span>
+              <span>15:00</span>
+              <span>30:00</span>
+              <span>45:00 (Fin 1T)</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Columna Lateral Derecha: Métricas de Bloque + Tagueo One-Click -->
+      <aside class="tactica-side-col">
+        <!-- Métricas Tácticas de Bloque (Comparativa Local vs Visitante) -->
+        <div class="side-card metrics-card">
+          <div class="card-header">
+            <div>
+              <h3 class="card-title">MÉTRICAS DE BLOQUE EN VIVO</h3>
+              <p class="card-subtitle">Geometría del equipo en el instante actual</p>
+            </div>
+            <span class="badge-live-pulse">EN VIVO</span>
+          </div>
+
+          <div class="teams-block-comparison">
+            <!-- Bloque Local -->
+            <div class="team-metrics-block local-block">
+              <div class="team-header-row">
+                <span class="team-name-tag local">🔵 SPORTIVO BELGRANO (Local)</span>
+                <span class="line-status-pill compact">Línea Alta</span>
+              </div>
+              <div class="metrics-grid">
+                <div class="metric-cell" title="Extensión lateral del bloque (eje ancho 68m)">
+                  <span class="m-label">Amplitud</span>
+                  <span class="m-val" id="localAmplitud">42.4 <small>m</small></span>
+                  <div class="meter-bar"><div class="meter-fill" id="fillLocalAmp" style="width: 62%;"></div></div>
+                </div>
+                <div class="metric-cell" title="Extensión arco a arco del bloque (eje largo 105m)">
+                  <span class="m-label">Profundidad</span>
+                  <span class="m-val" id="localProfundidad">28.6 <small>m</small></span>
+                  <div class="meter-bar"><div class="meter-fill" id="fillLocalProf" style="width: 44%;"></div></div>
+                </div>
+                <div class="metric-cell" title="Superficie de la envolvente convexa del equipo">
+                  <span class="m-label">Área Ocupada</span>
+                  <span class="m-val" id="localArea">890 <small>m²</small></span>
+                  <div class="meter-bar"><div class="meter-fill" id="fillLocalArea" style="width: 55%;"></div></div>
+                </div>
+                <div class="metric-cell" title="Distancia media al centroide (Stretch index: menor = más compacto)">
+                  <span class="m-label">Compacidad</span>
+                  <span class="m-val" id="localCompacidad">11.8 <small>m</small></span>
+                  <div class="meter-bar"><div class="meter-fill" id="fillLocalComp" style="width: 38%;"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bloque Visitante -->
+            <div class="team-metrics-block away-block">
+              <div class="team-header-row">
+                <span class="team-name-tag away">🔴 ALUMNI (Visitante)</span>
+                <span class="line-status-pill alert">Bloque Partido</span>
+              </div>
+              <div class="metrics-grid">
+                <div class="metric-cell">
+                  <span class="m-label">Amplitud</span>
+                  <span class="m-val" id="awayAmplitud">38.1 <small>m</small></span>
+                  <div class="meter-bar"><div class="meter-fill away" id="fillAwayAmp" style="width: 56%;"></div></div>
+                </div>
+                <div class="metric-cell">
+                  <span class="m-label">Profundidad</span>
+                  <span class="m-val highlight-alert" id="awayProfundidad">44.8 <small>m</small></span>
+                  <div class="meter-bar"><div class="meter-fill away" id="fillAwayProf" style="width: 78%;"></div></div>
+                </div>
+                <div class="metric-cell">
+                  <span class="m-label">Área Ocupada</span>
+                  <span class="m-val" id="awayArea">1,240 <small>m²</small></span>
+                  <div class="meter-bar"><div class="meter-fill away" id="fillAwayArea" style="width: 75%;"></div></div>
+                </div>
+                <div class="metric-cell">
+                  <span class="m-label">Compacidad</span>
+                  <span class="m-val" id="awayCompacidad">16.4 <small>m</small></span>
+                  <div class="meter-bar"><div class="meter-fill away" id="fillAwayComp" style="width: 68%;"></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tagueo One-Click con Buffer de -10 Segundos -->
+        <div class="side-card tagging-card">
+          <div class="card-header">
+            <div>
+              <h3 class="card-title">TAGUEO ONE-CLICK</h3>
+              <p class="card-subtitle">Registra con colchón automático de -10 seg</p>
+            </div>
+            <span class="shortcut-tip">Atajos [P, S, T, B, R, X]</span>
+          </div>
+
+          <!-- Selector de Equipo para el Tag -->
+          <div class="tag-team-choice">
+            <span class="choice-label">Equipo:</span>
+            <label><input type="radio" name="tagTeam" value="home" checked> <span class="tag-radio local">🔵 Local</span></label>
+            <label><input type="radio" name="tagTeam" value="away"> <span class="tag-radio away">🔴 Visitante</span></label>
+            <label><input type="radio" name="tagTeam" value="both"> <span class="tag-radio general">⚪ General</span></label>
+          </div>
+
+          <!-- Botones de Tagueo Rápido -->
+          <div class="tag-buttons-grid">
+            <button class="tag-btn" data-tag="Presión" data-shortcut="P">
+              <span class="tag-icon">⚡</span>
+              <span class="tag-name">Presión Alta</span>
+              <kbd class="tag-kbd">P</kbd>
+            </button>
+            <button class="tag-btn" data-tag="Salida" data-shortcut="S">
+              <span class="tag-icon">🧱</span>
+              <span class="tag-name">Salida de Fondo</span>
+              <kbd class="tag-kbd">S</kbd>
+            </button>
+            <button class="tag-btn" data-tag="Transición" data-shortcut="T">
+              <span class="tag-icon">🚀</span>
+              <span class="tag-name">Transición Rápida</span>
+              <kbd class="tag-kbd">T</kbd>
+            </button>
+            <button class="tag-btn" data-tag="Pelota Parada" data-shortcut="B">
+              <span class="tag-icon">🎯</span>
+              <span class="tag-name">Pelota Parada</span>
+              <kbd class="tag-kbd">B</kbd>
+            </button>
+            <button class="tag-btn" data-tag="Recuperación" data-shortcut="R">
+              <span class="tag-icon">🛡️</span>
+              <span class="tag-name">Recuperación</span>
+              <kbd class="tag-kbd">R</kbd>
+            </button>
+            <button class="tag-btn" data-tag="Pérdida" data-shortcut="X">
+              <span class="tag-icon">⚠️</span>
+              <span class="tag-name">Pérdida Crítica</span>
+              <kbd class="tag-kbd">X</kbd>
+            </button>
+          </div>
+
+          <!-- Feed de Eventos Tagueados (Interactivos para Saltos de Video) -->
+          <div class="tagged-events-feed">
+            <div class="feed-header">
+              <span>HISTORIAL DE JUGADAS (<span id="tagCount">4</span>)</span>
+              <span class="feed-hint">Clic en la jugada para saltar al video</span>
+            </div>
+            <div class="feed-list" id="taggedEventsList">
+              <!-- Renderizado dinámicamente con JS -->
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <!-- ============================================================== -->
+  <!-- VISTA 2: RENDIMIENTO INDIVIDUAL (ESTADÍSTICAS POR JUGADOR)     -->
+  <!-- ============================================================== -->
+  <main class="view-container" id="viewJugadores">
+    <div class="players-view-layout">
+      <!-- Columna Izquierda: Tabla y Filtros -->
+      <section class="players-table-section">
+        <!-- Barra de Filtros de Plantel -->
+        <div class="players-filter-bar">
+          <div class="team-tab-switch">
+            <button class="team-filter-btn active" data-team="home">🔵 Sportivo Belgrano (Local)</button>
+            <button class="team-filter-btn" data-team="away">🔴 Alumni (Visitante)</button>
+          </div>
+
+          <div class="zone-filter-pills">
+            <button class="zone-pill active" data-zone="all">Todos (11)</button>
+            <button class="zone-pill" data-zone="arquero">Arquero (1)</button>
+            <button class="zone-pill" data-zone="defensa">Defensores (4)</button>
+            <button class="zone-pill" data-zone="mediocampo">Mediocampistas (4)</button>
+            <button class="zone-pill" data-zone="ataque">Delanteros (2)</button>
+          </div>
+
+          <div class="table-search">
+            <input type="text" id="playerSearchInput" placeholder="Buscar por dorsal o apellido...">
+          </div>
+        </div>
+
+        <!-- Banner de Métricas Globales del Equipo -->
+        <div class="team-physical-overview">
+          <div class="stat-card-mini">
+            <span class="stat-mini-label">Distancia Total Equipo</span>
+            <span class="stat-mini-val" id="teamTotalDistance">104.2 <small>km</small></span>
+            <span class="stat-mini-sub">Promedio 9.5 km / jugador</span>
+          </div>
+          <div class="stat-card-mini">
+            <span class="stat-mini-label">Velocidad Pico Partido</span>
+            <span class="stat-mini-val accent">31.8 <small>km/h</small></span>
+            <span class="stat-mini-sub">#7 Nicolás Gómez (min 38)</span>
+          </div>
+          <div class="stat-card-mini">
+            <span class="stat-mini-label">Volumen Alta Intensidad</span>
+            <span class="stat-mini-val">12.4 <small>km</small></span>
+            <span class="stat-mini-sub">>19 km/h (11.9% del total)</span>
+          </div>
+          <div class="stat-card-mini">
+            <span class="stat-mini-label">Despliegue Físico Global</span>
+            <span class="stat-mini-val" style="color: var(--accent-lime);">Nivel Alto</span>
+            <span class="stat-mini-sub">Intensidad sostenida 90 min</span>
+          </div>
+        </div>
+
+        <!-- Tabla Analítica Ordenable -->
+        <div class="table-container">
+          <table class="analytics-table" id="playersTable">
+            <thead>
+              <tr>
+                <th data-sort="number">DORSAL</th>
+                <th data-sort="name">JUGADOR</th>
+                <th data-sort="position">POSICIÓN / LÍNEA</th>
+                <th data-sort="minutes">MIN</th>
+                <th data-sort="distance">DISTANCIA TOTAL</th>
+                <th data-sort="maxSpeed">VEL. MÁX</th>
+                <th data-sort="avgSpeed">VEL. PROMEDIO</th>
+                <th data-sort="sprints">SPRINTS (>19 km/h)</th>
+                <th data-sort="rating">VALORACIÓN DT</th>
+                <th>ACCIONES</th>
+              </tr>
+            </thead>
+            <tbody id="playersTableBody">
+              <!-- Inyectado por JS -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Columna Derecha: Ficha de Inspección Táctica del Jugador -->
+      <aside class="player-inspector-card" id="playerInspector">
+        <div class="inspector-header">
+          <div class="player-avatar-box">
+            <span class="jersey-num" id="inspectNum">#8</span>
+          </div>
+          <div class="player-title-box">
+            <h3 class="player-name" id="inspectName">Rodrigo Fernández</h3>
+            <span class="player-role-badge" id="inspectRole">Interior Derecho · Mediocampo</span>
+            <div class="inspector-rating-pill" id="inspectRatingPill">🟢 Destacado</div>
+          </div>
+        </div>
+
+        <!-- Cancha con Posición Promedio y Huella Espacial -->
+        <div class="inspector-section">
+          <div class="section-title-row">
+            <span class="section-title">POSICIÓN PROMEDIO Y HUELLA ESPACIAL</span>
+            <span class="section-note">Centro de gravedad en cancha</span>
+          </div>
+          <div class="inspector-pitch-box">
+            <canvas id="inspectorPitchCanvas" width="360" height="234"></canvas>
+            <div class="field-centroid-tag" id="centroidCoordinate">X: 58.2m · Y: 46.5m (Banda Der.)</div>
+          </div>
+        </div>
+
+        <!-- Desglose de Intensidad Física (Rangos de Velocidad) -->
+        <div class="inspector-section">
+          <div class="section-title-row">
+            <span class="section-title">DESGLOSE DE VELOCIDAD</span>
+            <span class="section-note">Distribución de esfuerzo</span>
+          </div>
+          <div class="speed-bars-stack">
+            <div class="speed-tier-row">
+              <span class="tier-label">Caminata (&lt;7 km/h)</span>
+              <div class="tier-bar-bg"><div class="tier-fill c-walk" id="fillWalk" style="width: 42%;"></div></div>
+              <span class="tier-value" id="valWalk">4.3 km (42%)</span>
+            </div>
+            <div class="speed-tier-row">
+              <span class="tier-label">Trote (7–14 km/h)</span>
+              <div class="tier-bar-bg"><div class="tier-fill c-jog" id="fillJog" style="width: 36%;"></div></div>
+              <span class="tier-value" id="valJog">3.7 km (36%)</span>
+            </div>
+            <div class="speed-tier-row">
+              <span class="tier-label">Carrera (14–21 km/h)</span>
+              <div class="tier-bar-bg"><div class="tier-fill c-run" id="fillRun" style="width: 16%;"></div></div>
+              <span class="tier-value" id="valRun">1.6 km (16%)</span>
+            </div>
+            <div class="speed-tier-row">
+              <span class="tier-label">Sprint (&gt;21 km/h)</span>
+              <div class="tier-bar-bg"><div class="tier-fill c-sprint" id="fillSprint" style="width: 6%;"></div></div>
+              <span class="tier-value" id="valSprint">0.6 km (6%)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Conclusiones Tácticas para el DT -->
+        <div class="inspector-section">
+          <span class="section-title">OBSERVACIÓN TÁCTICA PARA EL CUERPO TÉCNICO</span>
+          <div class="inspector-dt-notes" id="inspectDtNotes">
+            Gran despliegue en transiciones ofensivas. Tendencia a desprenderse hacia la banda en salida rival; mantener atención a los relevos con el lateral derecho.
+          </div>
+          <button class="btn-jump-player-video" id="btnJumpPlayerVideo">
+            ▶ Ver participaciones clave en Mesa Táctica
+          </button>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <!-- ============================================================== -->
+  <!-- VISTA 3: PATRONES TÁCTICOS DETECTADOS                          -->
+  <!-- ============================================================== -->
+  <main class="view-container" id="viewPatrones">
+    <div class="patrones-container">
+      <!-- Encabezado de la Sección con Filosofía del Sistema -->
+      <div class="patrones-hero-banner">
+        <div class="hero-left">
+          <h2>DETECCIÓN DE PATRONES Y DESAJUSTES POSICIONALES</h2>
+          <p class="hero-desc">
+            Señales estadísticas para contrastar en video — <strong>no son diagnósticos definitivos</strong>. 
+            El software detecta desviaciones geométricas; el cuerpo técnico evalúa la intención táctica (desmarques deliberados o marcas personales).
+          </p>
+        </div>
+        <div class="hero-filters">
+          <span class="filter-caption">FILTRAR SEVERIDAD:</span>
+          <div class="severity-pills">
+            <button class="sev-pill active" data-sev="all">Todas (5)</button>
+            <button class="sev-pill red" data-sev="alta">🔴 Alta (2)</button>
+            <button class="sev-pill yellow" data-sev="media">🟡 Media (2)</button>
+            <button class="sev-pill blue" data-sev="obs">⚪ Observación (1)</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Grilla de Tarjetas de Alerta Táctica -->
+      <div class="patterns-grid" id="patternsGrid">
+        <!-- Tarjeta 1: Desconexión Defensiva (Severidad Alta) -->
+        <article class="pattern-card sev-alta" data-sev="alta" data-time="08:15">
+          <div class="pattern-header">
+            <div class="pattern-tag-group">
+              <span class="sev-badge alta">🔴 ALTA SEVERIDAD</span>
+              <span class="pattern-type">Patrón: <code>desconectado</code></span>
+            </div>
+            <span class="team-label local">🔵 Local (Sportivo Belgrano)</span>
+          </div>
+
+          <div class="pattern-body">
+            <div class="player-lead">
+              <div class="lead-num">#4</div>
+              <div>
+                <h4 class="lead-name">Lucas Rossi (Lateral Derecho)</h4>
+                <span class="lead-role">Línea Defensiva</span>
+              </div>
+            </div>
+
+            <h3 class="pattern-title">Desconexión defensiva sostenida respecto a los centrales</h3>
+            <p class="pattern-text">
+              El jugador mantiene una distancia promedio de <strong>13.8 metros</strong> respecto a la línea del segundo marcador central, habilitando el pasillo interior derecho en el <strong>72% de los avances rivales</strong>.
+            </p>
+
+            <div class="pattern-metric-box">
+              <div class="pm-col">
+                <span class="pm-label">Exceso sobre la línea:</span>
+                <span class="pm-val">+78% vs. mediana de defensores</span>
+              </div>
+              <div class="pm-col">
+                <span class="pm-label">Persistencia en el tiempo:</span>
+                <span class="pm-val">4 segmentos sostenidos (>10 seg)</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pattern-footer">
+            <div class="timestamps-list">
+              <span class="ts-label">Evidencia en video:</span>
+              <button class="ts-btn active-seek" data-seek="495">08:15</button>
+              <button class="ts-btn" data-seek="1360">22:40</button>
+              <button class="ts-btn" data-seek="2230">37:10</button>
+            </div>
+            <button class="btn-inspect-clip" data-seek="495">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              <span>Ver jugada (08:15)</span>
+            </button>
+          </div>
+        </article>
+
+        <!-- Tarjeta 2: No Achica en Ataque (Severidad Alta) -->
+        <article class="pattern-card sev-alta" data-sev="alta" data-time="14:32">
+          <div class="pattern-header">
+            <div class="pattern-tag-group">
+              <span class="sev-badge alta">🔴 ALTA SEVERIDAD</span>
+              <span class="pattern-type">Patrón: <code>no_achica</code></span>
+            </div>
+            <span class="team-label local">🔵 Local (Sportivo Belgrano)</span>
+          </div>
+
+          <div class="pattern-body">
+            <div class="player-lead">
+              <div class="lead-num">#2</div>
+              <div>
+                <h4 class="lead-name">Julián Maidana (Primer Central)</h4>
+                <span class="lead-role">Línea Defensiva</span>
+              </div>
+            </div>
+
+            <h3 class="pattern-title">Déficit de avance durante la subida ofensiva del equipo</h3>
+            <p class="pattern-text">
+              Durante 3 transiciones consecutivas donde el mediocampo avanzó más de 18 metros en campo rival, la zaga central quedó retrasada a más de 35 metros del mediocentro, <strong>partiendo el bloque en dos</strong>.
+            </p>
+
+            <div class="pattern-metric-box">
+              <div class="pm-col">
+                <span class="pm-label">Déficit de desplazamiento:</span>
+                <span class="pm-val">6.2 metros por detrás de la línea</span>
+              </div>
+              <div class="pm-col">
+                <span class="pm-label">Ocurrencia:</span>
+                <span class="pm-val">3 de 4 fases de ataque evaluadas</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pattern-footer">
+            <div class="timestamps-list">
+              <span class="ts-label">Evidencia en video:</span>
+              <button class="ts-btn active-seek" data-seek="872">14:32</button>
+              <button class="ts-btn" data-seek="1745">29:05</button>
+            </div>
+            <button class="btn-inspect-clip" data-seek="872">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              <span>Ver jugada (14:32)</span>
+            </button>
+          </div>
+        </article>
+
+        <!-- Tarjeta 3: Bloque Estirado en Transición Defensiva (Severidad Media) -->
+        <article class="pattern-card sev-media" data-sev="media" data-time="19:20">
+          <div class="pattern-header">
+            <div class="pattern-tag-group">
+              <span class="sev-badge media">🟡 SEVERIDAD MEDIA</span>
+              <span class="pattern-type">Patrón: <code>bloque_estirado</code></span>
+            </div>
+            <span class="team-label away">🔴 Visitante (Alumni)</span>
+          </div>
+
+          <div class="pattern-body">
+            <div class="player-lead">
+              <div class="lead-num">CO</div>
+              <div>
+                <h4 class="lead-name">Línea Media y Delantera Visitante</h4>
+                <span class="lead-role">Bloque Colectivo</span>
+              </div>
+            </div>
+
+            <h3 class="pattern-title">Profundidad excesiva y falta de repliegue tras pérdida</h3>
+            <p class="pattern-text">
+              La distancia entre el último defensor y el centrodelantero rival superó los <strong>46 metros sostenidos</strong> tras perder la pelota en el círculo central, concediendo superioridad numérica en zona 2.
+            </p>
+
+            <div class="pattern-metric-box">
+              <div class="pm-col">
+                <span class="pm-label">Profundidad registrada:</span>
+                <span class="pm-val">46.8 m (umbral táctico: 35.0 m)</span>
+              </div>
+              <div class="pm-col">
+                <span class="pm-label">Stretch Index:</span>
+                <span class="pm-val">17.2 m (dispersión muy alta)</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pattern-footer">
+            <div class="timestamps-list">
+              <span class="ts-label">Evidencia en video:</span>
+              <button class="ts-btn active-seek" data-seek="1160">19:20</button>
+              <button class="ts-btn" data-seek="2515">41:55</button>
+            </div>
+            <button class="btn-inspect-clip" data-seek="1160">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              <span>Ver jugada (19:20)</span>
+            </button>
+          </div>
+        </article>
+
+        <!-- Tarjeta 4: Desmarque Asimétrico / Pérdida de Referencia (Severidad Media) -->
+        <article class="pattern-card sev-media" data-sev="media" data-time="11:05">
+          <div class="pattern-header">
+            <div class="pattern-tag-group">
+              <span class="sev-badge media">🟡 SEVERIDAD MEDIA</span>
+              <span class="pattern-type">Patrón: <code>desmarque_asimetrico</code></span>
+            </div>
+            <span class="team-label local">🔵 Local (Sportivo Belgrano)</span>
+          </div>
+
+          <div class="pattern-body">
+            <div class="player-lead">
+              <div class="lead-num">#8</div>
+              <div>
+                <h4 class="lead-name">Rodrigo Fernández (Interior Derecho)</h4>
+                <span class="lead-role">Línea de Mediocampo</span>
+              </div>
+            </div>
+
+            <h3 class="pattern-title">Adelantamiento excesivo respecto al mediocentro de contención</h3>
+            <p class="pattern-text">
+              Juega sistemáticamente 12 metros por delante del eje defensivo, forzando al mediocentro #5 a cubrir 28 metros de ancho en soledad durante las transiciones rivales.
+            </p>
+
+            <div class="pattern-metric-box">
+              <div class="pm-col">
+                <span class="pm-label">Separación del doble 5:</span>
+                <span class="pm-val">14.1 m (media habitual: 7.5 m)</span>
+              </div>
+              <div class="pm-col">
+                <span class="pm-label">Balance defensivo:</span>
+                <span class="pm-val">Recuperaciones en carril propio: 1</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pattern-footer">
+            <div class="timestamps-list">
+              <span class="ts-label">Evidencia en video:</span>
+              <button class="ts-btn active-seek" data-seek="665">11:05</button>
+              <button class="ts-btn" data-seek="2020">33:40</button>
+            </div>
+            <button class="btn-inspect-clip" data-seek="665">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              <span>Ver jugada (11:05)</span>
+            </button>
+          </div>
+        </article>
+
+        <!-- Tarjeta 5: Basculación Lenta en Banda Opuesta (Observación) -->
+        <article class="pattern-card sev-obs" data-sev="obs" data-time="16:40">
+          <div class="pattern-header">
+            <div class="pattern-tag-group">
+              <span class="sev-badge obs">⚪ EN OBSERVACIÓN</span>
+              <span class="pattern-type">Patrón: <code>cobertura_lateral</code></span>
+            </div>
+            <span class="team-label away">🔴 Visitante (Alumni)</span>
+          </div>
+
+          <div class="pattern-body">
+            <div class="player-lead">
+              <div class="lead-num">#3</div>
+              <div>
+                <h4 class="lead-name">Facundo Carrizo (Lateral Izquierdo)</h4>
+                <span class="lead-role">Línea Defensiva</span>
+              </div>
+            </div>
+
+            <h3 class="pattern-title">Retardo en basculación al sector del balón</h3>
+            <p class="pattern-text">
+              Cuando el juego se vuelca hacia la banda derecha local, el lateral izquierdo opuesto tarda más de <strong>5.5 segundos en cerrar el carril interno</strong>, dejando espacio de cambio de frente.
+            </p>
+
+            <div class="pattern-metric-box">
+              <div class="pm-col">
+                <span class="pm-label">Tiempo de ajuste de línea:</span>
+                <span class="pm-val">5.8s (esperado &lt; 3.0s)</span>
+              </div>
+              <div class="pm-col">
+                <span class="pm-label">Distancia al segundo central:</span>
+                <span class="pm-val">21.4 m en basculación</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pattern-footer">
+            <div class="timestamps-list">
+              <span class="ts-label">Evidencia en video:</span>
+              <button class="ts-btn active-seek" data-seek="1000">16:40</button>
+            </div>
+            <button class="btn-inspect-clip" data-seek="1000">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              <span>Ver jugada (16:40)</span>
+            </button>
+          </div>
+        </article>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============================================================== -->
+  <!-- VISTA 4: SEMÁFORO POST-PARTIDO (EVALUACIÓN DEL DT)            -->
+  <!-- ============================================================== -->
+  <main class="view-container" id="viewSemaforo">
+    <div class="semaforo-container">
+      <!-- Tablero de Control y Balance del Plantel -->
+      <div class="semaforo-summary-card">
+        <div class="summary-headline">
+          <div>
+            <h2>PIZARRA EVALUATIVA DEL CUERPO TÉCNICO</h2>
+            <p class="summary-desc">
+              Calificación post-partido (domingo a la noche). Evaluá rendimiento global, detectá desajustes por línea y exportá el informe para la semana de trabajo.
+            </p>
+          </div>
+          <div class="summary-actions">
+            <button class="action-btn-accent" id="btnExportWhatsApp">
+              <span>📋 Copiar Informe WhatsApp</span>
+            </button>
+            <button class="action-btn-secondary" id="btnResetSemaforo">
+              <span>🔄 Restablecer</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Indicadores de Balance Global -->
+        <div class="scoreboard-metrics-row">
+          <div class="score-pill-card green">
+            <span class="sp-dot">🟢</span>
+            <span class="sp-val" id="countVerde">7</span>
+            <span class="sp-lbl">DESTACADOS</span>
+            <span class="sp-pct" id="pctVerde">64% del 11 titular</span>
+          </div>
+          <div class="score-pill-card yellow">
+            <span class="sp-dot">🟡</span>
+            <span class="sp-val" id="countAmarillo">3</span>
+            <span class="sp-lbl">REGULARES</span>
+            <span class="sp-pct" id="pctAmarillo">27% del 11 titular</span>
+          </div>
+          <div class="score-pill-card red">
+            <span class="sp-dot">🔴</span>
+            <span class="sp-val" id="countRojo">1</span>
+            <span class="sp-lbl">BAJO RENDIMIENTO</span>
+            <span class="sp-pct" id="pctRojo">9% del 11 titular</span>
+          </div>
+
+          <!-- Rendimiento por Líneas -->
+          <div class="lines-performance-summary">
+            <span class="lps-title">BALANCE POR LÍNEAS:</span>
+            <div class="line-progress-item">
+              <span class="lp-name">Arquero:</span>
+              <span class="lp-tag good">100% Destacado</span>
+            </div>
+            <div class="line-progress-item">
+              <span class="lp-name">Defensa:</span>
+              <span class="lp-tag warn">50% Destacado · 25% Bajo</span>
+            </div>
+            <div class="line-progress-item">
+              <span class="lp-name">Medio:</span>
+              <span class="lp-tag good">75% Destacado · 25% Reg</span>
+            </div>
+            <div class="line-progress-item">
+              <span class="lp-name">Ataque:</span>
+              <span class="lp-tag warn">50% Destacado · 50% Reg</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Grilla de Tarjetas de Jugadores para Calificar -->
+      <div class="semaforo-roster-grid" id="semaforoRosterGrid">
+        <!-- Generado dinámicamente con JS -->
+      </div>
+    </div>
+  </main>
+
+  <!-- ============================================================== -->
+  <!-- MODAL: INFORME RESUMIDO PARA EL CUERPO TÉCNICO (WHATSAPP)       -->
+  <!-- ============================================================== -->
+  <div class="modal-backdrop hidden" id="reportModal">
+    <div class="modal-window">
+      <div class="modal-header">
+        <h3 class="modal-title">INFORME PARA EL CUERPO TÉCNICO</h3>
+        <button class="modal-close" id="btnCloseModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-instruction">Texto formateado listo para compartir por WhatsApp / Telegram con los ayudantes y profes:</p>
+        <textarea class="report-textarea" id="reportTextarea" rows="14" readonly></textarea>
+      </div>
+      <div class="modal-footer">
+        <span class="copy-status-msg" id="copyStatusMsg"></span>
+        <button class="action-btn-accent" id="btnCopyReport">
+          <span>📋 Copiar al Portapapeles</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notificación Toast Flotante -->
+  <div class="toast-notification hidden" id="toastNotification">
+    <span class="toast-icon">✅</span>
+    <span class="toast-message" id="toastMessage">Evento guardado con éxito</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
