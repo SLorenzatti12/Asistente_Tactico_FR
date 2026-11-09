@@ -1010,6 +1010,30 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
 
 **Límite:** al volver, la lleva a la tarjeta, no al píxel exacto: la tarjeta queda centrada si antes estaba en otra posición.
 
+## Procedencia de las salidas del pipeline (09/11/2026)
+
+**Por qué:** surgió de un peritaje simulado. Para defender un resultado hay que poder demostrar de qué video salió y con qué código, y volver a producirlo igual.
+
+**Qué se registra** (`src/utils/procedencia.py`): cada parquet guarda en su esquema, bajo la clave `analizador` (JSON), el script, los parámetros, el commit (y si había cambios sin commitear en archivos versionados), las versiones de las librerías y la fecha UTC. Además, guarda la procedencia de su entrada bajo `origen`, con el SHA-256 de ese archivo. Así la cadena llega hasta el SHA-256 del video original.
+- **`run_inference.py`:** el SHA-256 del video, calculado antes de procesar, el modelo, los umbrales por clase, el IoU de supresión arquero/jugador y el skip.
+- **`calibrate.py --apply`:** el SHA-256 de la calibración y, si existe, del archivo de puntos (o de qué video se propagó), el estadio y sus medidas, los tramos, los rangos excluidos y los tramos sin calibración válida.
+- **`team_assignment.py`:** el SHA-256 del video de los colores y el otro tiempo usado como referencia.
+- **`player_stats.py --guardar <x>.parquet`** y **`tactical_patterns.py`**, que ahora guardan su salida en parquet (`<entrada>_patrones.parquet` por defecto; `--guardar no` para no guardar). El CSV no puede llevar procedencia.
+- **Ver la cadena:** `scripts/ver_procedencia.py <parquet>`; con `--verificar` recalcula los SHA-256 de lo que sigue en disco, y con `--json` muestra todo.
+
+**No cambia ningún dato:** la metadata de pandas (`pandas` y `PANDAS_ATTRS`) se conserva, y `df.attrs` vuelve igual. Un parquet anterior no tiene la clave: `leer_meta` devuelve `None` y el visor lo avisa.
+
+**Verificado sobre `sportivo_min --skip 1`** (calibración propagada desde `sportivo_crop3`, control OK 0,24 m):
+- Línea base intacta: 131 IDs, tracks 21/26/77, y el parquet de detecciones idéntico fila por fila al de la corrida anterior.
+- `ver_procedencia.py --verificar` sobre los patrones muestra las cinco etapas hasta el video (`fc22d600…527c`), con los hashes coincidiendo.
+- `leer_meta` sobre `sportivo_crop3` y `partido_clip2` da `None`, y se leen igual.
+- El SHA-256 de un video de 173 MB da lo mismo dos veces, y lo mismo que leerlo de una sola vez.
+
+**Límites:**
+- **Solo registra, no impide:** cualquiera puede reescribir un parquet. La prueba de integridad es recalcular los hashes, y el más fuerte es el del video original.
+- **`team_assignment` reescribe su entrada:** el hash de esa entrada es el de la versión anterior del mismo archivo, que ya no existe. El visor lo aclara.
+- **Los parquets existentes no tienen procedencia** hasta que se reprocesen.
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.

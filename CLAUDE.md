@@ -75,6 +75,10 @@ python src/homography/calibrate.py data/videos/<clip>.mp4 --estadio "<estadio>"
 #     --puntos-archivo data/calibracion/<clip>_puntos_f<N>.json)
 python src/homography/calibrate.py data/videos/<clip>.mp4 --apply data/outputs/<clip>_coords.parquet
 
+# Procedencia: cada parquet guarda de dónde viene (script, parámetros, commit,
+# versiones y la cadena hasta el SHA-256 del video; ver src/utils/procedencia.py)
+python3 scripts/ver_procedencia.py data/outputs/<clip>_coords_field_patrones.parquet [--verificar]
+
 # Rehacer el video anotado (H.264, cajas en todos los frames) desde el parquet, sin el detector
 python scripts/regenerar_video_anotado.py data/videos/<clip>.mp4 data/outputs/<clip>_coords.parquet
 
