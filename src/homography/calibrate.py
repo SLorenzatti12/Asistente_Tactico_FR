@@ -1432,6 +1432,7 @@ def apply_homography(coords_path: Path, homography_path: Path, video_path: Path 
             print("        Este porcentaje es alto — revisá la calibración, puede haber puntos mal marcados.")
 
     out_path = coords_path.parent / f"{coords_path.stem}_field.parquet"
+    from src.utils.procedencia import escribir_parquet_con_meta
     escribir_parquet_con_meta(df_filtered, out_path, _procedencia_apply(
         coords_path, homography_path, calib, medidas, video_path, tramos_no_validos, n_total, n_out))
 
