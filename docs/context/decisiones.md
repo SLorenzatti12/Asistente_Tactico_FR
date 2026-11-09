@@ -271,6 +271,7 @@ Cada caso que alguien revisa contra el video queda acá: es la única evidencia 
 | ídem | track 17: jugador que hace marca personal (seguía al track 4) — `desconectado` | severidad **1.00**, desviación sostenida (proporción 0.59) | **falso positivo** (DT): ídem | ídem |
 | ídem | track 21/74 (la misma persona en dos tracks: 21 → 74, se solapan 0.30 s a 13 cm) — `no_achica` | con los umbrales de entonces (bastaban 2 subidas en el clip): track 21, severidad **1.00**, déficit en **1 de 4** subidas, valor técnico 17.8; su continuación, track 74, severidad 0.54, **1 de 1**, valor técnico 4.3. Evidencia de los dos: 0:30.2–0:40.1 | **falso positivo** (revisado contra el video): seguía la basculación normal del equipo, no era una falla del jugador | `MIN_FASES_ATAQUE` de 2 a 4 y `PROPORCION_MIN_NO_ACHICA` = 0.5 estricto (hacen falta al menos 3 de 4 subidas). Además fue el caso que calibró `MAX_SOLAPAMIENTO_FUSION_SEG` para los candidatos a fusión |
 | `sportivo_crop3` (Sportivo–Crecer, cámara fija nocturna, calibración validada) | track 626 (home), banda cercana cerca de la mitad de cancha — `desconectado` | severidad **1.00** ("tendencia marcada"), 81% del tiempo en cancha, evidencia 4:48.7–5:24.7 | **desvío real pero leve, aceptable** (revisado por Santi, 16/10/2026) | ninguna todavía (ver abajo) |
+| ídem | track 2374 (home, delantero) — `desconectado` | 81% del tiempo en cancha, evidencia 21:06,8–21:45,7 | **falso positivo** (Santi, 09/11/2026): el partido estaba detenido mientras el arquero rival buscaba la pelota fuera de la cancha | marca "Posible juego detenido" (ver la sección de ese nombre) |
 
 **Patrón en los casos revisados: la severidad máxima no predice nada.** Los 4 casos revisados con severidad 1.00 (tracks 8, 17 y 21 de `partido_clip2`; 626 de `sportivo_crop3`) resultaron 3 falsos positivos y 1 desvío leve. Ninguno fue una "tendencia marcada" como dice el texto que ve el DT.
 
@@ -1033,6 +1034,38 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
 - **Solo registra, no impide:** cualquiera puede reescribir un parquet. La prueba de integridad es recalcular los hashes, y el más fuerte es el del video original.
 - **`team_assignment` reescribe su entrada:** el hash de esa entrada es el de la versión anterior del mismo archivo, que ya no existe. El visor lo aclara.
 - **Los parquets existentes no tienen procedencia** hasta que se reprocesen.
+
+## Posible juego detenido (09/11/2026)
+
+**Por qué:** el sistema no sabe si la pelota está en juego, y la clase `ball` tiene recall bajo. El track 2374 (`desconectado`, 21:07–21:45 en `sportivo_crop3`) era un falso positivo: el juego estaba detenido. En las calificaciones del partido, el juego detenido explicaba 8 de los 16 `desconectado` no útiles del 2° tiempo.
+
+**Heurística** (`src/analysis/estado_juego.py`): velocidad colectiva.
+- Para cada jugador de campo (clase `player`, sin árbitros ni arqueros), el desplazamiento en el último segundo, con los tiempos reales de los cuadros. Por cuadro, la **mediana** entre jugadores, suavizada con una mediana móvil de 2 s.
+- Es "posible juego detenido" si esa curva queda bajo el umbral durante al menos la duración mínima. Cuadros con menos de 4 jugadores medidos no cuentan.
+- Cada video (un tiempo) se calcula por separado, y los tramos sin calibración válida quedan afuera.
+- **Parámetros** (`PARAMETROS_POR_DEFECTO`, configurables y por CLI): umbral 1,4 m/s, duración mínima 15 s, suavizado 2 s, desplazamiento en 1 s, y un momento queda marcado si al menos el 50% de sus tramos cae en juego detenido.
+- **Salida:** `python3 src/analysis/estado_juego.py <clip>_coords_field.parquet` → `<clip>_estado_juego.parquet` (inicio, fin, duración, velocidad mediana), con procedencia y los parámetros usados.
+- **Cruce con los patrones:** `detectar_patrones` agrega `fraccion_juego_detenido` y `posible_juego_detenido`. **No saca momentos ni cambia la severidad.** La vista muestra "⏸ Posible juego detenido" con la ayuda "El movimiento general bajó; revisá en el video si la pelota estaba en juego", y un filtro para ocultarlos, apagado por defecto.
+
+**Desvío de lo pedido: desplazamiento en 1 s, no entre cuadros consecutivos.** Con `--skip 3` los cuadros están a 0,12 s, y el temblor de 1–2 px de la caja en la banda lejana (~0,3 m por píxel) ya da 2–5 m/s. Entre cuadros, el tramo detenido del 2374 queda en 1,6–2,4 m/s, lo mismo que el partido (mediana 2,2), y ningún umbral cumple los dos casos. En 1 s ese ruido pesa diez veces menos. Perfiles en `docs/perfiles_juego_detenido.png`.
+
+**Calibración** (grilla de umbrales de 0,9 a 1,4 m/s y duraciones de 5, 10 y 15 s, contra los dos casos y las calificaciones de los dos tiempos):
+- **Track 2374:** marcado el 96% de su tramo (intervalo 21:08,0–21:45,4).
+- **Basculación de los tracks 21/74 (`partido_clip2`, 0:30–0:41, juego en curso):** no se marca. La curva baja de 1,4 m/s solo ~1,5 s, alrededor de 0:35. Es un caso débil: otra cámara (transmisión que panea) y fuera del tramo con calibración válida.
+- **Contra las calificaciones,** con criterios de prueba: marcados 7 de los 12 momentos comentados como juego detenido, 0 de los 9 útiles y 2 de los 16 correctos sin ese comentario. 1,3 m/s con 10 s marcaba uno útil.
+- **Cuánto del partido marca:** 36% del 1° tiempo (12 intervalos) y 27% del 2° (18). Es plausible, porque en un partido la pelota está detenida buena parte del tiempo. Los intervalos están en los `*_estado_juego.parquet`.
+
+**Resultado:**
+- **Criterios vigentes:** marcado 1 de 2 momentos en el 1° tiempo (el #2374) y 0 de 1 en el 2° (#82, útil).
+- **Criterios de prueba:** 5 de 16 en el 1° tiempo y 6 de 22 en el 2°.
+- **Las demás columnas no cambian:** idénticas fila por fila en los cinco videos con equipos, con los dos juegos de criterios, y los "no evaluados" también.
+- **AppTest:** la etiqueta aparece en el #2374 y no en el #931; el filtro deja 1 momento; en "Probar otros criterios", 5 líneas marcadas. Sin las columnas (resultado anterior), la vista funciona igual, sin etiqueta.
+
+**Límites:**
+- **Una pausa larga con trote** (jugadores que se reacomodan rápido en un córner) puede no detectarse.
+- **Un tramo de juego muy lento** (toque atrás, equipo esperando) puede marcarse. Es un aviso, no un diagnóstico, y por eso no saca nada.
+- **El umbral es absoluto** y se eligió mirando este partido: la mediana del 2° tiempo (1,45 m/s) es más alta que la del 1° (1,31). Hay que revisarlo con otro partido o con otra cámara.
+- **El #958** quedó marcado (87%) aunque Santi lo calificó "basculación normal": el juego venía lento.
 
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
