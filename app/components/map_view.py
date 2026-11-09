@@ -38,7 +38,9 @@ import streamlit as st
 from theme import (
     BALL_COLOR,
     FIELD_BG,
+    FIELD_BG_ALT,
     FIELD_LENGTH,
+    FIELD_LINE_ALPHA,
     FIELD_LINES,
     FIELD_WIDTH,
     TEAM_COLORS,
@@ -46,6 +48,10 @@ from theme import (
     UNKNOWN_COLOR,
     plotly_layout_base,
 )
+
+# ROOT ya está en sys.path (lo agrega app/main.py antes de importar este
+# componente) — mismo patrón que player_stats_view.py.
+from src.homography.medidas_cancha import MEDIDAS_REGLAMENTARIAS
 
 # Umbral del test de outliers de Iglewicz-Hoaglin sobre el z-score robusto.
 _MAD_Z_THRESHOLD = 3.5
@@ -174,17 +180,94 @@ def _block_metrics(players_df: pd.DataFrame) -> dict | None:
 
 
 # ── Dibujo del mapa ──────────────────────────────────────────
+def _add_spot(fig: go.Figure, cx: float, cy: float, r: float = 0.28) -> None:
+    """Punto reglamentario (central, penal): círculo relleno sólido, debajo
+    de los jugadores (son más grandes que el punto, no hay superposición
+    visual salvo que un jugador esté parado justo ahí)."""
+    fig.add_shape(type="circle", x0=cx - r, y0=cy - r, x1=cx + r, y1=cy + r,
+                  fillcolor=FIELD_LINES, line=dict(width=0), layer="below")
+
+
+def _add_arc(fig: go.Figure, cx: float, cy: float, r: float,
+             theta0: float, theta1: float, n: int = 24) -> None:
+    """Tramo de circunferencia (medialuna del área, arcos de esquina). Se
+    agrega como trazo de línea (no hay `shape` de arco parcial en Plotly) —
+    se dibuja antes que los jugadores, así que queda debajo por orden."""
+    theta = np.linspace(theta0, theta1, n)
+    fig.add_trace(go.Scatter(
+        x=cx + r * np.cos(theta), y=cy + r * np.sin(theta), mode="lines",
+        line=dict(color=FIELD_LINE_ALPHA, width=1.5),
+        hoverinfo="skip", showlegend=False,
+    ))
+
+
 def _draw_field_shapes(fig: go.Figure) -> go.Figure:
-    """Dibuja las líneas de la cancha (perímetro, mitad, círculo central)."""
-    # TODO Nico: agregar áreas grande/chica y arcos en un sprint futuro.
-    line = dict(color=FIELD_LINES, width=2)
-    fig.add_shape(type="rect", x0=0, y0=0, x1=FIELD_LENGTH, y1=FIELD_WIDTH, line=line)
-    fig.add_shape(type="line", x0=FIELD_LENGTH / 2, y0=0, x1=FIELD_LENGTH / 2, y1=FIELD_WIDTH,
-                  line=dict(color=FIELD_LINES, width=1))
+    """Dibuja la cancha estilo mockup: césped rayado (franjas verticales
+    alternadas) + marcas reglamentarias completas (perímetro, mitad, círculo
+    y punto central, áreas grande/chica, puntos y medialunas de penal, arcos
+    de esquina). Medidas desde MEDIDAS_REGLAMENTARIAS — ver
+    src/homography/medidas_cancha.py (única fuente de verdad del proyecto;
+    acá se usan los valores reglamentarios fijos, no los de un estadio
+    puntual — eso es un pendiente aparte, ver docs/pendiente_nico_medidas_cancha.md)."""
+    m = MEDIDAS_REGLAMENTARIAS
+    largo, ancho = FIELD_LENGTH, FIELD_WIDTH
+    linea = dict(color=FIELD_LINE_ALPHA, width=1.5)
+
+    # Césped rayado
+    n_franjas = 10
+    stripe_w = largo / n_franjas
+    for i in range(n_franjas):
+        color = FIELD_BG if i % 2 == 0 else FIELD_BG_ALT
+        fig.add_shape(type="rect", x0=i * stripe_w, y0=0, x1=(i + 1) * stripe_w, y1=ancho,
+                      fillcolor=color, line=dict(width=0), layer="below")
+
+    # Perímetro y línea de mitad de campo
+    fig.add_shape(type="rect", x0=0, y0=0, x1=largo, y1=ancho, line=linea, layer="below")
+    fig.add_shape(type="line", x0=largo / 2, y0=0, x1=largo / 2, y1=ancho, line=linea, layer="below")
+
+    # Círculo central + punto central
+    r = m["radio_circulo"]
     fig.add_shape(type="circle",
-                  x0=FIELD_LENGTH / 2 - 9.15, y0=FIELD_WIDTH / 2 - 9.15,
-                  x1=FIELD_LENGTH / 2 + 9.15, y1=FIELD_WIDTH / 2 + 9.15,
-                  line=dict(color=FIELD_LINES, width=1))
+                  x0=largo / 2 - r, y0=ancho / 2 - r, x1=largo / 2 + r, y1=ancho / 2 + r,
+                  line=linea, layer="below")
+    _add_spot(fig, largo / 2, ancho / 2)
+
+    # Áreas grande/chica, punto penal y medialuna — un lado y su espejo
+    area_g_largo, area_g_ancho = m["area_grande_largo"], m["area_grande_ancho"]
+    area_c_largo, area_c_ancho = m["area_chica_largo"], m["area_chica_ancho"]
+    dist_penal = m["distancia_penal"]
+    y0_g, y1_g = ancho / 2 - area_g_ancho / 2, ancho / 2 + area_g_ancho / 2
+    y0_c, y1_c = ancho / 2 - area_c_ancho / 2, ancho / 2 + area_c_ancho / 2
+
+    for lado in (1, -1):  # 1 = arco en x=0, -1 = arco en x=largo
+        x_fondo = 0 if lado == 1 else largo
+        x_area_g = area_g_largo if lado == 1 else largo - area_g_largo
+        x_area_c = area_c_largo if lado == 1 else largo - area_c_largo
+        x_penal = dist_penal if lado == 1 else largo - dist_penal
+
+        fig.add_shape(type="rect", x0=min(x_fondo, x_area_g), y0=y0_g,
+                      x1=max(x_fondo, x_area_g), y1=y1_g, line=linea, layer="below")
+        fig.add_shape(type="rect", x0=min(x_fondo, x_area_c), y0=y0_c,
+                      x1=max(x_fondo, x_area_c), y1=y1_c, line=linea, layer="below")
+        _add_spot(fig, x_penal, ancho / 2)
+
+        # Medialuna: solo el tramo del círculo (radio_circulo, centro en el
+        # punto penal) que queda fuera del área grande — bulto hacia el
+        # centro de la cancha, igual que la marca real.
+        theta0, theta1 = (-0.9, 0.9) if lado == 1 else (np.pi - 0.9, np.pi + 0.9)
+        _add_arc(fig, x_penal, ancho / 2, r, theta0, theta1)
+
+    # Arcos de esquina (radio reglamentario del área de córner, 1 m)
+    radio_esquina = 1.0
+    esquinas = [
+        (0, 0, 0, np.pi / 2),
+        (0, ancho, -np.pi / 2, 0),
+        (largo, 0, np.pi / 2, np.pi),
+        (largo, ancho, np.pi, 3 * np.pi / 2),
+    ]
+    for cx, cy, theta0, theta1 in esquinas:
+        _add_arc(fig, cx, cy, radio_esquina, theta0, theta1)
+
     return fig
 
 

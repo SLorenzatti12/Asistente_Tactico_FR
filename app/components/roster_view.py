@@ -41,7 +41,7 @@ def render_roster_manager(team_id: int) -> None:
         c1, c2, c3 = st.columns([1, 3, 1])
         numero = c1.number_input("Dorsal", min_value=0, max_value=99, step=1, value=0)
         nombre = c2.text_input("Nombre completo")
-        agregar = c3.form_submit_button("➕ Agregar", use_container_width=True)
+        agregar = c3.form_submit_button("➕ Agregar", width="stretch")
 
     if agregar:
         if not nombre.strip():

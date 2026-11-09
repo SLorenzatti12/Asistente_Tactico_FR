@@ -35,6 +35,9 @@ def main():
             for team_name, r in plantel.items():
                 print(f"Plantel «{team_name}»: {r['jugadores_subidos']} jugadores, "
                       f"{r['jugadores_borrados']} bajas replicadas")
+            tiempos = resumen.pop("partido_tiempos", {})
+            if tiempos.get("tiempos_subidos"):
+                print(f"Partidos de dos tiempos: {tiempos['tiempos_subidos']} tiempos agrupados")
             if not resumen:
                 print("No hay partidos con datos locales todavía.")
                 return

@@ -7,6 +7,11 @@ partido actual, y lo recuerda (tabla local `match_team`, ver
 src/db/team_repo.py) para no tener que reelegirlo cada vez que se reabre
 el partido. El plantel (roster_view.py) y el semáforo (tagging.py) usan
 el `team_id` que devuelve esta función.
+
+Si `match_name` es uno de los dos tiempos de un partido (`partido_tiempos`,
+ver src/db/partido_repo.py — feature de Santi), el equipo se asigna a los
+dos tiempos a la vez: antes, cambiarlo acá para un tiempo dejaba al otro
+con la asignación vieja.
 """
 import sys
 from pathlib import Path
@@ -17,7 +22,17 @@ _SRC = Path(__file__).resolve().parent.parent.parent / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from db import partido_repo  # noqa: E402
 from db import team_repo as repo  # noqa: E402
+
+
+def _asignar_equipo(match_name: str, team_id: int) -> None:
+    """Asigna el equipo a `match_name` y, si pertenece a un partido de dos
+    tiempos, también al otro tiempo."""
+    repo.set_match_team(match_name, team_id)
+    otro = partido_repo.otro_tiempo(match_name)
+    if otro:
+        repo.set_match_team(otro["match_name"], team_id)
 
 
 def render_team_selector(match_name: str) -> dict | None:
@@ -25,6 +40,7 @@ def render_team_selector(match_name: str) -> dict | None:
     devuelve {"team_id", "team_name"} del equipo asignado, o None si
     todavía no se asignó ninguno."""
     repo.init_teams_table()
+    partido_repo.init_partidos_table()
 
     equipos = repo.list_teams()
     asignado = repo.get_match_team(match_name)
@@ -43,11 +59,11 @@ def render_team_selector(match_name: str) -> dict | None:
         ) if nombres else None
         if elegido and (asignado is None or asignado["team_name"] != elegido):
             team_id = next(t["id"] for t in equipos if t["name"] == elegido)
-            repo.set_match_team(match_name, team_id)
+            _asignar_equipo(match_name, team_id)
             st.rerun()
 
     with col_new:
-        with st.popover("➕ Nuevo equipo", use_container_width=True):
+        with st.popover("➕ Nuevo equipo", width="stretch"):
             nuevo_nombre = st.text_input("Nombre del equipo", key=f"new_team_name_{match_name}")
             if st.button("Crear y asignar", key=f"create_team_{match_name}"):
                 if not nuevo_nombre.strip():
@@ -56,7 +72,7 @@ def render_team_selector(match_name: str) -> dict | None:
                     st.warning("Ya existe un equipo con ese nombre.")
                 else:
                     team_id = repo.create_team(nuevo_nombre)
-                    repo.set_match_team(match_name, team_id)
+                    _asignar_equipo(match_name, team_id)
                     st.rerun()
 
     return repo.get_match_team(match_name)

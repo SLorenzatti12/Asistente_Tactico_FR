@@ -32,18 +32,23 @@ Qué va en este módulo vs. en aplicar_estilos_globales()
 import streamlit as st
 
 # ── Identidad de marca (debe coincidir con .streamlit/config.toml) ────
-BG_COLOR = "#0e1117"            # fondo principal — casi negro
-BG_SECONDARY = "#181c25"        # widgets, tarjetas, fondo de gráficos analíticos
-TEXT_COLOR = "#e6e9ef"          # blanco cálido, no puro (menos duro a la vista)
-BORDER_COLOR = "#2a2f3a"        # bordes sutiles sobre fondo oscuro
-ACCENT_COLOR = "#b45309"        # ámbar — acentos, botones primarios, métricas
-ACCENT_COLOR_SOFT = "rgba(180, 83, 9, 0.16)"  # el mismo ámbar, para fondos/badges
+# Paleta unificada con el mockup de alta fidelidad (mockup/styles.css) — antes
+# convivían dos paletas: esta (ámbar) y la que ya tenía .streamlit/config.toml
+# (verde lima). Se adopta la del mockup/config.toml.
+BG_COLOR = "#0a0b0d"            # fondo principal — carbón casi negro
+BG_SECONDARY = "#14171a"        # widgets, tarjetas, fondo de gráficos analíticos
+TEXT_COLOR = "#f0f3f6"          # blanco frío de alta legibilidad
+BORDER_COLOR = "#242a35"        # bordes sutiles sobre fondo oscuro
+ACCENT_COLOR = "#c3ff00"        # verde lima — acentos, botones primarios, métricas
+ACCENT_COLOR_SOFT = "rgba(195, 255, 0, 0.15)"  # el mismo lima, para fondos/badges
 
 # ── Cancha ──────────────────────────────────────────────────
 FIELD_LENGTH = 105  # eje x — arco a arco (m)
 FIELD_WIDTH = 68    # eje y — lateral a lateral (m)
-FIELD_BG = "#2d7d3a"     # verde césped
-FIELD_LINES = "#ffffff"  # líneas de cancha y texto sobre el verde
+FIELD_BG = "#14331e"       # verde césped oscuro — franja 1 del rayado (mockup)
+FIELD_BG_ALT = "#173b23"   # verde césped oscuro — franja 2 del rayado (mockup)
+FIELD_LINES = "#ffffff"   # líneas de cancha y texto sobre el verde (sólido)
+FIELD_LINE_ALPHA = "rgba(255, 255, 255, 0.75)"  # trazo de las marcas de cancha
 
 # ── Equipos ──────────────────────────────────────────────────
 TEAM_COLORS = {"home": "#1f77b4", "away": "#d62728"}   # azul local / rojo visitante
