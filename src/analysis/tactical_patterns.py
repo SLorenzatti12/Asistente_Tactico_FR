@@ -328,9 +328,9 @@ CRITERIOS_POR_DEFECTO = {
 
 def tramos_pelota_parada(tiempos_tag, ventana_seg: float) -> list[tuple[float, float]]:
     """Los tramos (desde, hasta) que no cuentan: de cada tag "Pelota parada"
-    a `ventana_seg` segundos después. El tag ya se guarda unos segundos antes
-    de apretar el botón (tagging.TAG_TIME_BUFFER_SEC), así que el tramo
-    empieza un poco antes de la jugada."""
+    a `ventana_seg` segundos después. `tiempos_tag` es el comienzo del clip de
+    cada tag (5 s antes de apretar el botón, tagging.TAG_SEGUNDOS_ANTES), así
+    que el tramo empieza un poco antes de la jugada."""
     if not ventana_seg or ventana_seg <= 0:
         return []
     return [(float(t), float(t) + float(ventana_seg)) for t in sorted(tiempos_tag or [])]

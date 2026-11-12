@@ -45,7 +45,7 @@ from src.analysis.tactical_patterns import (
 from src.analysis.lados import control_entre_tiempos
 from src.db import revision_patrones_repo as revisiones
 from components.sesion import puede, usuario_actual
-from components.tagging import format_time, get_events
+from components.tagging import format_time, get_events, get_paradas
 from theme import TEAM_COLORS, TEAM_LABELS
 
 # Nombres amigables para los patrones
@@ -67,34 +67,55 @@ def _pelotas_paradas(match_name: str | None) -> tuple:
     if eventos.empty:
         return ()
     es_pp = eventos["tag_type"].fillna("").str.strip().str.lower() == "pelota parada"
-    return tuple(sorted(float(t) for t in eventos.loc[es_pp, "time_sec"]))
+    # Desde el comienzo del clip del tag (5 s antes de apretar el botón).
+    return tuple(sorted(float(t) for t in eventos.loc[es_pp, "inicio_sec"]))
 
 
-def _calcular(df: pd.DataFrame, criterios: dict, pelotas_paradas: tuple = ()) -> tuple[pd.DataFrame, list[str], list[str]]:
+def _paradas_tagueadas(match_name: str | None) -> tuple:
+    """Las paradas cerradas del botón "Juego detenido" en este video:
+    ((inicio, fin), ...). Si hay, los patrones las usan en vez de la
+    estimación por el movimiento (ver _calcular)."""
+    if not match_name:
+        return ()
+    paradas = get_paradas(match_name, solo_cerradas=True)
+    return tuple((float(a), float(b)) for a, b in zip(paradas["inicio_sec"], paradas["fin_sec"]))
+
+
+def _calcular(df: pd.DataFrame, criterios: dict, pelotas_paradas: tuple = (),
+              paradas: tuple = ()) -> tuple[pd.DataFrame, list[str], list[str]]:
+    """`paradas`: las tagueadas con el botón "Juego detenido". Si hay, marcan
+    el juego detenido en lugar de la estimación por el movimiento
+    (estado_juego.py): las vio una persona. Queda anotado en
+    attrs["juego_detenido_fuente"] ("tagueado" o "estimado")."""
     if "team" not in df.columns or df["team"].dropna().empty:
         return pd.DataFrame(), [], ["Falta la columna 'team' en el archivo."]
     try:
         fases = detectar_fases(df, umbral_avance_ms=criterios["umbral_avance_ms"])
         lineas = asignar_lineas(df)
-        patrones = detectar_patrones(df, fases, lineas, criterios=criterios, pelotas_paradas=pelotas_paradas)
+        juego_detenido = (pd.DataFrame(list(paradas), columns=["inicio", "fin"]) if paradas else None)
+        patrones = detectar_patrones(df, fases, lineas, criterios=criterios, pelotas_paradas=pelotas_paradas,
+                                     juego_detenido=juego_detenido)
+        patrones.attrs["juego_detenido_fuente"] = "tagueado" if paradas else "estimado"
         return patrones, patrones.attrs.get("patrones_no_evaluados", []), patrones.attrs.get("avisos", [])
     except Exception as e:
         return pd.DataFrame(), [], [f"Error al calcular patrones: {str(e)}"]
 
 
 @st.cache_data(show_spinner="Analizando patrones tácticos en el partido…")
-def _calcular_patrones_cached(df: pd.DataFrame, pelotas_paradas: tuple = ()) -> tuple[pd.DataFrame, list[str], list[str]]:
+def _calcular_patrones_cached(df: pd.DataFrame, pelotas_paradas: tuple = (),
+                              paradas: tuple = ()) -> tuple[pd.DataFrame, list[str], list[str]]:
     """
     Ejecuta el pipeline de 3 pasos (fases -> líneas -> patrones) con los
     criterios vigentes. Devuelve (patrones_df, patrones_no_evaluados, avisos).
     """
-    return _calcular(df, criterios_completos(), pelotas_paradas)
+    return _calcular(df, criterios_completos(), pelotas_paradas, paradas)
 
 
 @st.cache_data(show_spinner="Recalculando con los criterios de prueba…", max_entries=12)
-def _calcular_con_criterios(df: pd.DataFrame, criterios: tuple, pelotas_paradas: tuple = ()) -> tuple[pd.DataFrame, list[str], list[str]]:
+def _calcular_con_criterios(df: pd.DataFrame, criterios: tuple, pelotas_paradas: tuple = (),
+                            paradas: tuple = ()) -> tuple[pd.DataFrame, list[str], list[str]]:
     """Lo mismo con otros criterios (tupla de pares, para poder cachear)."""
-    return _calcular(df, criterios_completos(dict(criterios)), pelotas_paradas)
+    return _calcular(df, criterios_completos(dict(criterios)), pelotas_paradas, paradas)
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -157,7 +178,7 @@ _HERO = """
 """
 
 
-def _html_tarjeta(row, titulo: str, team_label: str, team_color: str) -> str:
+def _html_tarjeta(row, titulo: str, team_label: str, team_color: str, fuente: str = "estimado") -> str:
     """Parte fija de la tarjeta de un patrón (sin los botones, que son widgets)."""
     valores = []
     if row["patron"] == "desconectado":
@@ -180,11 +201,19 @@ def _html_tarjeta(row, titulo: str, team_label: str, team_color: str) -> str:
 <div class="at-card-title">{html.escape(titulo)}</div>
 <div class="at-card-track">Track #{row['track_id']}</div>
 <div class="at-card-text">{html.escape(str(row['descripcion']))}</div>
-{_html_juego_detenido(row)}<div class="at-card-box">{caja}</div>
+{_html_juego_detenido(row, fuente)}<div class="at-card-box">{caja}</div>
 """
 
 
 _AYUDA_JUEGO_DETENIDO = "El movimiento general bajó; revisá en el video si la pelota estaba en juego."
+_AYUDA_JUEGO_DETENIDO_TAGUEADO = "Cae en una parada tagueada con el botón «Juego detenido»."
+
+
+def _texto_juego_detenido(fuente: str) -> tuple[str, str]:
+    """(título, ayuda) según de dónde sale el juego detenido."""
+    if fuente == "tagueado":
+        return "Juego detenido (tagueado)", _AYUDA_JUEGO_DETENIDO_TAGUEADO
+    return "Posible juego detenido", _AYUDA_JUEGO_DETENIDO
 
 
 def _juego_detenido(row) -> bool:
@@ -192,11 +221,12 @@ def _juego_detenido(row) -> bool:
     return bool(row.get("posible_juego_detenido", False))
 
 
-def _html_juego_detenido(row) -> str:
+def _html_juego_detenido(row, fuente: str = "estimado") -> str:
     if not _juego_detenido(row):
         return ""
-    return (f'<div class="at-card-pausa"><b>⏸ Posible juego detenido</b>'
-            f'<span>{_AYUDA_JUEGO_DETENIDO} ({row["fraccion_juego_detenido"]:.0%} de sus tramos)</span></div>')
+    titulo, ayuda = _texto_juego_detenido(fuente)
+    return (f'<div class="at-card-pausa"><b>⏸ {titulo}</b>'
+            f'<span>{ayuda} ({row["fraccion_juego_detenido"]:.0%} de sus tramos)</span></div>')
 
 
 def _ir_a(t: float, ancla: str | None = None) -> None:
@@ -405,8 +435,9 @@ _PERILLAS = {
     ],
     "Excepciones": [
         ("ventana_pelota_parada_seg", "Segundos después de cada «Pelota parada» tagueada que no cuentan",
-         "Usa los tags «Pelota parada» del analista, no la detección de pelota. El tag ya se guarda 10 s antes "
-         "de apretar el botón, así que 30 cubre hasta 20 s después de apretarlo. 0 = no se excluye nada.",
+         "Usa los tags «Pelota parada» del analista, no la detección de pelota. Cuenta desde el comienzo del "
+         "clip del tag (5 s antes de apretar el botón), así que 30 cubre hasta 25 s después de apretarlo. "
+         "0 = no se excluye nada.",
          0, 60, 5, lambda v: int(round(v)), float),
     ],
 }
@@ -452,7 +483,9 @@ def _render_probar_criterios(df: pd.DataFrame, match_name: str, patrones: pd.Dat
         if not cambiados:
             st.info("Son los criterios actuales: el resultado es el de arriba.")
             return
-        nuevos, _no_eval, _avisos = _calcular_con_criterios(df, st.session_state["_criterios_probados"], pelotas_paradas)
+        nuevos, _no_eval, _avisos = _calcular_con_criterios(df, st.session_state["_criterios_probados"], pelotas_paradas,
+                                                            _paradas_tagueadas(match_name))
+        titulo_detenido, ayuda_detenido = _texto_juego_detenido(nuevos.attrs.get("juego_detenido_fuente", "estimado"))
         actuales = set(zip(patrones["patron"], patrones["track_id"])) if not patrones.empty else set()
         probados = set(zip(nuevos["patron"], nuevos["track_id"])) if not nuevos.empty else set()
         st.markdown(f"**Con estos criterios: {len(probados)} momentos** (hoy {len(actuales)}) · "
@@ -475,8 +508,8 @@ def _render_probar_criterios(df: pd.DataFrame, match_name: str, patrones: pd.Dat
                 c_txt, c_ir = st.columns([4, 1], vertical_alignment="center")
                 c_txt.markdown(f"**{estado}** · {PATRON_TITULOS.get(row['patron'], row['patron'])} · track {row['track_id']} · "
                                f"{TEAM_LABELS.get(row['team'], row['team'])} · {opinion(clave)}"
-                               + (" · :orange[⏸ posible juego detenido]" if _juego_detenido(row) else ""),
-                               help=_AYUDA_JUEGO_DETENIDO if _juego_detenido(row) else None)
+                               + (f" · :orange[⏸ {titulo_detenido.lower()}]" if _juego_detenido(row) else ""),
+                               help=ayuda_detenido if _juego_detenido(row) else None)
                 evidencia = row.get("evidencia_seg", [])
                 if estado == "NUEVO":
                     _render_tramos(match_name, row, criterios_prueba, prefijo="prueba_")
@@ -519,7 +552,9 @@ def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
         else:
             st.warning(texto)
 
-    patrones, no_evaluados, avisos = _calcular_patrones_cached(df, _pelotas_paradas(match_name))
+    paradas = _paradas_tagueadas(match_name)
+    patrones, no_evaluados, avisos = _calcular_patrones_cached(df, _pelotas_paradas(match_name), paradas)
+    fuente_detenido = patrones.attrs.get("juego_detenido_fuente", "estimado")
     criterios_vigentes = patrones.attrs.get("criterios") or criterios_completos()
     vigentes = revisiones.vigentes(match_name) if match_name else {}
 
@@ -542,9 +577,14 @@ def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
             key="filtro_equipo_patrones",
         )
         ocultar_detenido = st.toggle(
-            "Ocultar momentos con posible juego detenido", key="ocultar_juego_detenido",
-            help="Los marcados no se borran ni cambian: solo se ocultan de la lista. " + _AYUDA_JUEGO_DETENIDO,
+            "Ocultar momentos con juego detenido", key="ocultar_juego_detenido",
+            help="Los marcados no se borran ni cambian: solo se ocultan de la lista. "
+                 + _texto_juego_detenido(fuente_detenido)[1],
         )
+    st.caption(f"⏸ Juego detenido: según {'la parada tagueada' if len(paradas) == 1 else f'las {len(paradas)} paradas tagueadas'} en este video."
+               if fuente_detenido == "tagueado" else
+               "⏸ Juego detenido: estimado por el movimiento general. Si lo tagueás con el botón «Juego detenido», "
+               "se usan las paradas tagueadas.")
 
     # Filtrar resultados. detectar_patrones ya los devuelve ordenados por
     # severidad, de más a menos señal: ese es el único uso de la severidad acá.
@@ -586,7 +626,8 @@ def render_tactical_patterns_tab(df: pd.DataFrame) -> None:
             clave = f"{row['patron']}_{row['track_id']}"
             with col, st.container(border=True, key=f"patron_{clave}"):
                 st.html(_html_tarjeta(row, PATRON_TITULOS.get(row["patron"], row["patron"]),
-                                      TEAM_LABELS.get(team_key, team_key), TEAM_COLORS.get(team_key, "#ffffff")))
+                                      TEAM_LABELS.get(team_key, team_key), TEAM_COLORS.get(team_key, "#ffffff"),
+                                      fuente_detenido))
                 # Evidencia: cada botón lleva a la Mesa táctica en ese instante
                 _render_tramos(match_name, row, criterios_vigentes, prefijo="")
                 if match_name:

@@ -23,8 +23,9 @@ from components.map_view import render_map, render_metrics_panel
 # Luci desarrolla estas funciones en components/tagging.py
 from components.tagging import init_db, render_tagging_panel, format_time
 from components.semaforo_view import render_semaforo
+from components.clips_view import render_clips
 # Los atajos de teclado taguean con las mismas funciones que los botones de tagging.py
-from components.tagging import TAG_TIME_BUFFER_SEC, get_event_types_for_team, save_event
+from components.tagging import alternar_parada, get_event_types_for_team, save_event, ventana_tag
 
 # Estadísticas individuales por jugador (src/analysis/player_stats.py)
 from components.player_stats_view import render_player_stats
@@ -88,6 +89,8 @@ _ESTILOS_MOCKUP = """
   border-radius: 12px;
   padding: 10px 16px;
 }
+/* Cinco vistas en una sola línea a 1440 px: menos margen interno en cada botón. */
+.st-key-vista button { padding-left: 8px; padding-right: 8px; }
 .at-brand { display: flex; align-items: center; gap: 12px; }
 .at-brand-icon {
   width: 36px; height: 36px; flex: 0 0 36px; border-radius: 9px;
@@ -150,6 +153,7 @@ VISTAS = {
     "analisis": ":material/videocam: Mesa táctica",
     "jugadores": ":material/directions_run: Jugadores",
     "patrones": ":material/warning: Patrones",
+    "clips": ":material/movie: Clips",
     "semaforo": ":material/traffic: Semáforo",
 }
 # Vista → permiso necesario (las que no figuran, las ve cualquier usuario).
@@ -195,6 +199,7 @@ def _html_atajos(team: str, con_tags: bool = True) -> str:
         tipos = get_event_types_for_team(team)[:9]
         tags = " ".join(f"<span><kbd>{i}</kbd>{t['name']}</span>" for i, t in enumerate(tipos, start=1))
         html += ("<span><kbd>L</kbd><kbd>V</kbd>taguear para Local / Visitante</span>"
+                 "<span><kbd>D</kbd>juego detenido / se reanudó</span>"
                  f"<span>Tags {TEAM_LABELS.get(team, team)}:</span>{tags}")
     return html + "</div>"
 
@@ -203,8 +208,9 @@ def _atajo_de_teclado(tecla: dict) -> None:
     """
     Atajos de tagueo que manda el componente de video. Hacen lo mismo que la
     botonera de tagging.py (Luci): el número N es el botón N del equipo
-    activo, en el orden en que se ven, con el mismo colchón de
-    TAG_TIME_BUFFER_SEC. El tiempo es el del video al apretar la tecla.
+    activo, en el orden en que se ven, con la misma ventana alrededor del
+    instante en que se apretó (tagging.ventana_tag), y D abre o cierra una
+    parada ("Juego detenido"). El tiempo es el del video al apretar la tecla.
     Solo para los roles que taguean (usuarios_repo.PERMISOS).
     """
     if not puede("taguear"):
@@ -224,11 +230,19 @@ def _atajo_de_teclado(tecla: dict) -> None:
             st.toast(f"No hay un botón {n} en la botonera de {TEAM_LABELS[team]} (hay {len(tipos)}).")
             return
         nombre = tipos[n - 1]["name"]
-        t = max(0.0, float(tecla["t"]) - TAG_TIME_BUFFER_SEC)
+        t = float(tecla["t"])
         usuario = usuario_actual()
         save_event(st.session_state["selected_match"], nombre, t, team, usuario["usuario"] if usuario else None)
-        st.toast(f"Tag guardado: {nombre} @ {format_time(t)} ({TEAM_LABELS[team]})")
+        inicio, fin = ventana_tag(t)
+        st.toast(f"Tag guardado: {nombre} · clip {format_time(inicio)}–{format_time(fin)} ({TEAM_LABELS[team]})")
         st.rerun()      # la corrida completa actualiza el historial de tags
+    elif tecla.get("accion") == "detenido":
+        usuario = usuario_actual()
+        estado, parada = alternar_parada(st.session_state["selected_match"], float(tecla["t"]),
+                                         usuario["usuario"] if usuario else None)
+        st.toast(f"Juego detenido desde {format_time(parada['inicio_sec'])}" if estado == "abierta" else
+                 f"Parada guardada: {format_time(parada['inicio_sec'])}–{format_time(parada['fin_sec'])}")
+        st.rerun()
 
 
 # ── Estado inicial de la sesión ─────────────────────────────
@@ -464,7 +478,8 @@ def main():
     # ── Encabezado: marca, partido, navegación y cambio de partido ──
     with st.container(key="app_header"):
         col_marca, col_partido, col_nav, col_cambiar, col_usuario = st.columns(
-            [2.4, 2.6, 4.6, 1.1, 1.1], vertical_alignment="center")
+            # Proporcional a lo que ocupa cada uno a 1440 px con las cinco vistas.
+            [2.54, 2.22, 4.93, 1.13, 1.13], vertical_alignment="center")
         # El popover va primero en el código (no en pantalla): el partido que
         # se elige ahí es el que muestra la píldora del medio.
         with col_cambiar:
@@ -571,6 +586,9 @@ def main():
     elif vista == "patrones":
         # ── Patrones tácticos detectados ──
         render_tactical_patterns_tab(df)
+    elif vista == "clips":
+        # ── Clips de los tags, uno detrás de otro ──
+        render_clips(match)
     else:
         # ── Semáforo: planilla del partido y plantel ────
         render_semaforo(match["name"])

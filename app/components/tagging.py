@@ -17,6 +17,15 @@ minutos y la valoración del DT, el ayudante y el coordinador, sobre el
 plantel del club) y src/db/semaforo_repo.py. La tabla vieja `semaforo` (una
 fila por dorsal) se sigue creando acá porque el sync a la nube la lee
 (src/db/local.py); ya no se escribe.
+
+Ventana de cada tag y "Juego detenido" (12/11/2026, cambio hecho por Santi;
+Santi le avisa a Luci): cada tag guarda el instante en que se apretó el botón y
+un clip alrededor (TAG_SEGUNDOS_ANTES antes, TAG_SEGUNDOS_DESPUES después), en
+vez de un solo instante 10 s antes. El botón "Juego detenido" se toca una vez
+cuando el juego para y otra cuando se reanuda: cada parada queda en la tabla
+`paradas`, con su comienzo y su fin. La usan los patrones, para marcar los
+momentos que caen con el juego detenido (ver tactical_patterns_view.py), y la
+vista Clips (components/clips_view.py).
 """
 
 import sqlite3
@@ -47,10 +56,16 @@ TEAM_OPTIONS = ["home", "away"]
 SCOPE_OPTIONS = ["home", "away", "both"]
 SCOPE_LABELS = {"home": "Solo Local", "away": "Solo Visitante", "both": "Ambos equipos"}
 
-# Colchón hacia atrás al tagear "ahora": la jugada se ve unos segundos antes
-# de llegar a tocar el botón, así que se guarda current_time - N (piso en 0).
-# Un solo lugar para cambiarlo si hace falta ajustar el valor.
-TAG_TIME_BUFFER_SEC = 10
+# Ventana de cada tag (12/11/2026): `time_sec` es el instante en que se apretó
+# el botón, y el clip va de TAG_SEGUNDOS_ANTES antes a TAG_SEGUNDOS_DESPUES
+# después (`inicio_sec`, `fin_sec`; piso en 0). La jugada empieza un poco antes
+# de llegar a tocar el botón y sigue después. Hasta el 12/11 se guardaba un solo
+# instante, 10 s antes de apretar: para esos eventos la ventana va de
+# `time_sec` a `time_sec + 15` (ver get_events).
+TAG_SEGUNDOS_ANTES = 5
+TAG_SEGUNDOS_DESPUES = 10
+_VENTANA_EVENTO_VIEJO = 15
+JUEGO_DETENIDO = "Juego detenido"
 
 
 def format_time(seconds: float) -> str:
@@ -113,6 +128,17 @@ def init_db() -> None:
     # Las filas de antes del login quedan en NULL ("sin dato").
     if "created_by" not in existing_cols:
         conn.execute("ALTER TABLE events ADD COLUMN created_by TEXT")
+    # Ventana del clip de cada tag (12/11/2026); NULL en los eventos de antes.
+    if "inicio_sec" not in existing_cols:
+        conn.execute("ALTER TABLE events ADD COLUMN inicio_sec REAL")
+        conn.execute("ALTER TABLE events ADD COLUMN fin_sec REAL")
+    # Paradas tagueadas con el botón "Juego detenido": fin_sec en NULL mientras
+    # el juego sigue detenido (se tocó una vez y todavía no la segunda).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS paradas ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT, match_name TEXT NOT NULL,"
+        " inicio_sec REAL NOT NULL, fin_sec REAL, created_by TEXT, created_at TEXT NOT NULL)"
+    )
     semaforo_cols = {row[1] for row in conn.execute("PRAGMA table_info(semaforo)").fetchall()}
     if "created_by" not in semaforo_cols:
         conn.execute("ALTER TABLE semaforo ADD COLUMN created_by TEXT")
@@ -166,23 +192,83 @@ def init_db() -> None:
     conn.close()
 
 
-def save_event(match_name: str, tag_type: str, time_sec: float, team: str, usuario: str | None = None) -> None:
-    """`usuario`: quién tagueó (nombre de usuario del login local)."""
+def ventana_tag(t_pulsacion: float) -> tuple[float, float]:
+    """(inicio, fin) del clip de un tag apretado en `t_pulsacion`."""
+    return max(0.0, t_pulsacion - TAG_SEGUNDOS_ANTES), t_pulsacion + TAG_SEGUNDOS_DESPUES
+
+
+def save_event(match_name: str, tag_type: str, t_pulsacion: float, team: str, usuario: str | None = None) -> None:
+    """Guarda el tag con el instante en que se apretó el botón (`time_sec`) y
+    su ventana (ver TAG_SEGUNDOS_ANTES). `usuario`: quién tagueó."""
+    inicio, fin = ventana_tag(t_pulsacion)
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT INTO events (match_name, tag_type, time_sec, team, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)",
-        (match_name, tag_type, time_sec, team, datetime.now().isoformat(), usuario),
+        "INSERT INTO events (match_name, tag_type, time_sec, inicio_sec, fin_sec, team, created_at, created_by) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (match_name, tag_type, t_pulsacion, inicio, fin, team, datetime.now().isoformat(), usuario),
     )
     conn.commit()
     conn.close()
 
 
 def update_event(event_id: int, tag_type: str, time_sec: float, team: str) -> None:
+    """Corregir el segundo de un tag mueve también su ventana."""
+    inicio, fin = ventana_tag(time_sec)
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "UPDATE events SET tag_type = ?, time_sec = ?, team = ? WHERE id = ?",
-        (tag_type, time_sec, team, event_id),
+        "UPDATE events SET tag_type = ?, time_sec = ?, inicio_sec = ?, fin_sec = ?, team = ? WHERE id = ?",
+        (tag_type, time_sec, inicio, fin, team, event_id),
     )
+    conn.commit()
+    conn.close()
+
+
+# ── Juego detenido: un toque al parar, otro al reanudar ─────────
+def parada_abierta(match_name: str) -> dict | None:
+    """La parada que se empezó a taguear y todavía no se cerró, si hay."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    fila = conn.execute(
+        "SELECT * FROM paradas WHERE match_name = ? AND fin_sec IS NULL ORDER BY id DESC LIMIT 1", (match_name,)
+    ).fetchone()
+    conn.close()
+    return dict(fila) if fila else None
+
+
+def alternar_parada(match_name: str, t: float, usuario: str | None = None) -> tuple[str, dict]:
+    """Si no hay una parada abierta, la abre en `t`; si hay, la cierra en `t`.
+    Devuelve ("abierta" | "cerrada", la parada). Si se cierra antes del
+    comienzo (se retrocedió el video), quedan ordenados."""
+    abierta = parada_abierta(match_name)
+    conn = sqlite3.connect(DB_PATH)
+    if abierta is None:
+        cur = conn.execute(
+            "INSERT INTO paradas (match_name, inicio_sec, created_by, created_at) VALUES (?, ?, ?, ?)",
+            (match_name, float(t), usuario, datetime.now().isoformat()))
+        resultado = ("abierta", {"id": cur.lastrowid, "inicio_sec": float(t), "fin_sec": None})
+    else:
+        inicio, fin = sorted((float(abierta["inicio_sec"]), float(t)))
+        conn.execute("UPDATE paradas SET inicio_sec = ?, fin_sec = ? WHERE id = ?", (inicio, fin, abierta["id"]))
+        resultado = ("cerrada", {"id": abierta["id"], "inicio_sec": inicio, "fin_sec": fin})
+    conn.commit()
+    conn.close()
+    return resultado
+
+
+def get_paradas(match_name: str, solo_cerradas: bool = False) -> pd.DataFrame:
+    """Las paradas tagueadas del partido, en orden."""
+    filtro = " AND fin_sec IS NOT NULL" if solo_cerradas else ""
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(
+        f"SELECT id, inicio_sec, fin_sec, created_by FROM paradas WHERE match_name = ?{filtro} ORDER BY inicio_sec",
+        conn, params=(match_name,))
+    conn.close()
+    return df
+
+
+def delete_parada(parada_id: int) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM paradas WHERE id = ?", (parada_id,))
     conn.commit()
     conn.close()
 
@@ -296,7 +382,9 @@ def delete_event_type(type_id: int) -> None:
 
 def get_events(match_name: str) -> pd.DataFrame:
     """
-    Todos los eventos tagueados de este partido (id incluido), orden cronológico.
+    Todos los eventos tagueados de este partido (id incluido), orden cronológico,
+    con la ventana de cada uno (`inicio_sec`, `fin_sec`; para los de antes del
+    12/11/2026, de `time_sec` a `time_sec + 15`).
     El emoji sale de un LEFT JOIN por nombre contra event_types — es un lookup
     "mejor esfuerzo" (no una FK real, ver decisión de diseño de tag_type como
     texto libre): si el tipo fue renombrado o borrado, el evento viejo queda
@@ -305,14 +393,17 @@ def get_events(match_name: str) -> pd.DataFrame:
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query(
         """
-        SELECT e.id, e.team, e.tag_type, e.time_sec, e.created_by, et.emoji
+        SELECT e.id, e.team, e.tag_type, e.time_sec,
+               COALESCE(e.inicio_sec, e.time_sec) AS inicio_sec,
+               COALESCE(e.fin_sec, e.time_sec + ?) AS fin_sec,
+               e.created_by, et.emoji
         FROM events e
         LEFT JOIN event_types et ON et.name = e.tag_type
         WHERE e.match_name = ?
         ORDER BY e.time_sec ASC
         """,
         conn,
-        params=(match_name,),
+        params=(_VENTANA_EVENTO_VIEJO, match_name),
     )
     conn.close()
     return df
@@ -507,7 +598,9 @@ def _render_events_timeline(events_df: pd.DataFrame, current_time: float) -> Non
 
     points = selection.selection.get("points", []) if selection else []
     if points:
-        _request_seek(float(points[0]["customdata"][1]))
+        # Al comienzo de la ventana del tag, no al instante del botón.
+        evento = events_df[events_df["id"] == points[0]["customdata"][0]]
+        _request_seek(float(evento["inicio_sec"].iloc[0]) if len(evento) else float(points[0]["customdata"][1]))
 
 
 # ── Comparativa por tipo de evento (Plotly) ─────────────────────
@@ -772,8 +865,9 @@ def _render_events_cards(events_df: pd.DataFrame, solo_lectura: bool = False) ->
 
             card_label = f"{event['tag_type']} · {TEAM_LABELS[team_key]} · {format_time(event['time_sec'])}"
             if col_info.button(card_label, key=f"seek_{event['id']}", type="tertiary", use_container_width=True,
-                               help=f"Tagueado por {event.get('created_by') or 'sin dato (antes del login)'}"):
-                _request_seek(float(event["time_sec"]))
+                               help=f"Clip {format_time(event['inicio_sec'])}–{format_time(event['fin_sec'])} · "
+                                    f"tagueado por {event.get('created_by') or 'sin dato (antes del login)'}"):
+                _request_seek(float(event["inicio_sec"]))
 
             if solo_lectura:
                 continue
@@ -841,11 +935,24 @@ def render_tagging_panel(solo_lectura: bool = False) -> None:
             cols = st.columns(2)
             for i, et in enumerate(event_types):
                 if cols[i % 2].button(et["name"], use_container_width=True, key=f"tag_btn_{et['id']}"):
-                    saved_time = max(0.0, current_time - TAG_TIME_BUFFER_SEC)
                     usuario = usuario_actual()
-                    save_event(match_name, et["name"], saved_time, team, usuario["usuario"] if usuario else None)
-                    st.toast(f"Tag guardado: {et['name']} @ {format_time(saved_time)} ({TEAM_LABELS[team]})")
+                    save_event(match_name, et["name"], current_time, team, usuario["usuario"] if usuario else None)
+                    inicio, fin = ventana_tag(current_time)
+                    st.toast(f"Tag guardado: {et['name']} · clip {format_time(inicio)}–{format_time(fin)} "
+                             f"({TEAM_LABELS[team]})")
                     st.rerun()
+
+        # Juego detenido: un toque al parar, otro al reanudar (tecla D).
+        abierta = parada_abierta(match_name)
+        if st.button(f"▶ Se reanudó (detenido desde {format_time(abierta['inicio_sec'])})" if abierta
+                     else "⏸ Juego detenido", key="btn_juego_detenido", width="stretch",
+                     type="primary" if abierta else "secondary",
+                     help="Tocalo cuando el juego se detiene y otra vez cuando se reanuda (tecla D)."):
+            usuario = usuario_actual()
+            estado, parada = alternar_parada(match_name, current_time, usuario["usuario"] if usuario else None)
+            st.toast(f"Juego detenido desde {format_time(parada['inicio_sec'])}" if estado == "abierta" else
+                     f"Parada guardada: {format_time(parada['inicio_sec'])}–{format_time(parada['fin_sec'])}")
+            st.rerun()
 
         st.divider()
         _render_eventos(match_name, current_time)
@@ -865,3 +972,35 @@ def _render_eventos(match_name: str, current_time: float, solo_lectura: bool = F
 
     with st.expander(f"Historial de eventos ({len(events_df)})", expanded=False):
         _render_events_cards(events_df, solo_lectura=solo_lectura)
+
+    paradas = get_paradas(match_name)
+    with st.expander(f"{JUEGO_DETENIDO} ({len(paradas)})", expanded=False):
+        _render_paradas(paradas, solo_lectura=solo_lectura)
+
+
+def _render_paradas(paradas: pd.DataFrame, solo_lectura: bool = False) -> None:
+    """Las paradas tagueadas: clic para ir al comienzo, y borrar (por ejemplo
+    una que se abrió sin querer)."""
+    if paradas.empty:
+        st.caption("Todavía no hay paradas tagueadas. Tocá «⏸ Juego detenido» (o la tecla D) cuando el juego "
+                   "se detiene y otra vez cuando se reanuda.")
+        return
+    for _, p in paradas.iterrows():
+        fin = "sigue detenido" if pd.isna(p["fin_sec"]) else format_time(p["fin_sec"])
+        with st.container(border=True):
+            if solo_lectura:
+                col_info, col_borrar = st.container(), None
+            else:
+                col_info, col_borrar = st.columns([7, 1])
+            if col_info.button(f"⏸ {format_time(p['inicio_sec'])} – {fin}", key=f"seek_parada_{p['id']}",
+                               type="tertiary", width="stretch",
+                               help=f"Tagueado por {p.get('created_by') or 'sin dato'}"):
+                _request_seek(float(p["inicio_sec"]))
+            if col_borrar is not None and col_borrar.button(
+                    "", icon=":material/delete:", key=f"borrar_parada_{p['id']}", width="stretch"):
+                delete_parada(int(p["id"]))
+                registro_repo.registrar(
+                    "evento_borrado", usuario_actual(), objetivo=st.session_state.get("selected_match"),
+                    detalle=f"{JUEGO_DETENIDO} #{p['id']}: {format_time(p['inicio_sec'])}–{fin} "
+                            f"(tagueado por {p.get('created_by') or 'sin dato'})")
+                st.rerun()

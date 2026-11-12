@@ -80,6 +80,7 @@ _UMBRAL_CAMBIO_SEG = 0.05
 
 _HTML = """
 <div id="video-sync-wrap">
+  <div id="video-sync-clip" hidden></div>
   <video id="video-sync-el" controls playsinline></video>
   <div id="video-sync-mini" hidden>
     <button id="video-sync-play" type="button">▶ Reproducir</button>
@@ -117,6 +118,12 @@ _CSS = """
   background: transparent; color: var(--st-primary-color, #c3ff00);
 }
 #video-sync-play:focus-visible { outline: 2px solid var(--st-primary-color, #c3ff00); outline-offset: 2px; }
+#video-sync-clip {
+  line-height: normal; font-size: 0.85rem; padding: 6px 12px;
+  border-bottom: 1px solid var(--st-border-color, #2a2f3a);
+  color: var(--st-primary-color, #c3ff00);
+}
+#video-sync-clip[hidden] { display: none; }
 #video-sync-tiempo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; opacity: 0.8; }
 #video-sync-el {
   display: block;
@@ -199,6 +206,54 @@ export default function (component) {
     else video.addEventListener("loadedmetadata", aplicar, { once: true })
   }
 
+  // Lista de clips ({id, lista: [[inicio, fin, etiqueta], ...], desde}): se
+  // reproduce cada clip de su comienzo a su fin y se pasa al siguiente; al
+  // terminar el último, se pausa. Cada id se aplica una vez, como el salto.
+  // Si el usuario mueve el video fuera del clip, la lista se abandona.
+  const cartel = parentElement.querySelector("#video-sync-clip")
+  const clips = data?.clips
+  if (clips && parentElement._videoSyncClipsId !== clips.id && clips.lista?.length) {
+    parentElement._videoSyncClipsId = clips.id
+    parentElement._videoSyncClips = { lista: clips.lista, k: Math.max(0, clips.desde || 0) }
+    const empezar = () => irAlClip(parentElement._videoSyncClips.k)
+    if (video.readyState >= 1) empezar()
+    else video.addEventListener("loadedmetadata", empezar, { once: true })
+  }
+  function irAlClip(k) {
+    const estado = parentElement._videoSyncClips
+    if (!estado || k >= estado.lista.length) {
+      parentElement._videoSyncClips = null
+      cartel.hidden = true
+      video.pause()
+      return
+    }
+    estado.k = k
+    const [inicio, fin, etiqueta] = estado.lista[k]
+    cartel.hidden = false
+    cartel.textContent = `Clip ${k + 1} de ${estado.lista.length} · ${etiqueta ?? ""} · ${mmss(inicio)}–${mmss(fin)}`
+    estado.saltando = true
+    video.currentTime = inicio
+    video.play().catch(() => {})
+  }
+  if (!parentElement._videoSyncClipsEscucha) {
+    video.addEventListener("seeked", () => {
+      const estado = parentElement._videoSyncClips
+      if (!estado) return
+      if (estado.saltando) { estado.saltando = false; return }
+      const [inicio, fin] = estado.lista[estado.k]
+      if (video.currentTime < inicio - 0.5 || video.currentTime > fin + 0.5) {
+        parentElement._videoSyncClips = null
+        cartel.hidden = true
+      }
+    })
+    video.addEventListener("timeupdate", () => {
+      const estado = parentElement._videoSyncClips
+      if (!estado || estado.saltando) return
+      if (video.currentTime >= estado.lista[estado.k][1]) irAlClip(estado.k + 1)
+    })
+    parentElement._videoSyncClipsEscucha = true
+  }
+
   // El timer se crea UNA sola vez por instancia del componente, no en cada
   // re-render (que Streamlit dispara cada vez que este mismo componente
   // llama a setTriggerValue — si se recreara el interval acá adentro,
@@ -225,6 +280,7 @@ export default function (component) {
   // tocan mientras se escribe en un campo de texto ni con Ctrl/Cmd/Alt.
   //   Espacio: reproducir/pausar · ←/→: ±1 s (Shift: ±5 s)
   //   1–9: tag con el botón N de la botonera · L / V: tagueo Local / Visitante
+  //   D: juego detenido (un toque al parar, otro al reanudar)
   // Los tags y el equipo los resuelve Python (trigger "tecla"): así se usa
   // la misma lógica que el clic en los botones de tagging.py.
   if (!parentElement._videoSyncTeclas) {
@@ -249,6 +305,8 @@ export default function (component) {
       } else if (e.key === "l" || e.key === "L" || e.key === "v" || e.key === "V") {
         const equipo = e.key.toLowerCase() === "l" ? "home" : "away"
         accion = () => setTriggerValue("tecla", { accion: "equipo", equipo })
+      } else if (e.key === "d" || e.key === "D") {
+        accion = () => setTriggerValue("tecla", { accion: "detenido", t: video.currentTime })
       }
       if (!accion) return
       e.preventDefault()
@@ -385,7 +443,7 @@ def _servidor_videos() -> _ServidorVideos:
 
 def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = None,
                               al_tecla: Callable[[dict], None] | None = None,
-                              mini: bool = False) -> float | None:
+                              mini: bool = False, clips: dict | None = None) -> float | None:
     """
     Reproductor de video que expone su tiempo de reproducción a Python.
 
@@ -406,12 +464,18 @@ def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = N
         salto: {"id": int, "t": segundos} — lleva el video a `t`. Se aplica
             una sola vez por `id` (pasar el mismo dict en cada corrida no
             vuelve a saltar), y siempre al montarse una instancia nueva.
+        clips: {"id": int, "lista": [[inicio, fin, etiqueta], ...], "desde": k}
+            — reproduce cada clip de su comienzo a su fin, uno detrás de otro,
+            empezando por el k-ésimo, y se pausa al terminar el último (vista
+            Clips). Como el salto, cada `id` se aplica una sola vez. Si el
+            usuario mueve el video fuera del clip, la lista se abandona.
         mini: True para no mostrar el video, solo un botón de reproducir/pausar
             y el tiempo ("Solo cancha"): el video sigue reproduciendo y
             marcando el tiempo de la cancha, y los atajos siguen andando.
-        al_tecla: se llama con {"accion": "tag", "n": 1–9, "t": segundos} o
-            {"accion": "equipo", "equipo": "home"|"away"} cuando se aprieta un
-            atajo de tagueo (espacio y flechas los resuelve el propio video).
+        al_tecla: se llama con {"accion": "tag", "n": 1–9, "t": segundos},
+            {"accion": "equipo", "equipo": "home"|"away"} o
+            {"accion": "detenido", "t": segundos} cuando se aprieta un atajo
+            de tagueo (espacio y flechas los resuelve el propio video).
 
     Returns:
         El segundo de reproducción que el video acaba de reportar (float),
@@ -438,6 +502,9 @@ def render_video_sincronizado(video_path: Path, key: str, salto: dict | None = N
     if salto is not None:
         datos["salto"] = {"id": int(salto["id"]), "t": float(salto["t"])}
     datos["mini"] = bool(mini)
+    if clips is not None:
+        datos["clips"] = {"id": int(clips["id"]), "desde": int(clips.get("desde", 0)),
+                          "lista": [[float(a), float(b), str(e)] for a, b, e in clips["lista"]]}
     if video_path.stat().st_size <= LIMITE_ESTATICO_BYTES:
         datos["src"] = _asegurar_video_estatico(video_path)
     else:
