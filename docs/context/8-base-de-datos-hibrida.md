@@ -56,7 +56,7 @@ la entrada correspondiente en `decisiones.md`.
 | `estadios`, `match_estadio` (medidas de cancha por estadio y dónde se jugó cada partido — ver `src/db/estadio_repo.py`; todavía no se sincronizan) | |
 | `partido_tiempos` (agrupa los dos videos/tiempos de un partido — ver `src/db/partido_repo.py`) | `match_halves` (mismo agrupamiento, referenciando las dos filas de `matches`) |
 | `match_videos` (ruta local del video de cada partido — ver `src/db/video_repo.py`) | Copias sincronizadas de `events` y `player_ratings`, para consulta remota |
-| `events`, `event_types`, `semaforo` (tal cual las creó/evoluciona `tagging.py`; `semaforo` ya no se escribe desde el 27/10/2026) | Video subido a Supabase **Storage**, bucket privado `match-videos` |
+| `events`, `event_types`, `semaforo` (tal cual las creó/evoluciona `tagging.py`; `semaforo` ya no se escribe desde el 27/10/2026). Desde el 12/11/2026, `events.inicio_sec`/`fin_sec` (clip de cada tag) y la tabla `paradas` (botón "Juego detenido"): **todavía no se sincronizan** | Video subido a Supabase **Storage**, bucket privado `match-videos` |
 | `semaforo_minutos`, `semaforo_valoraciones` (planilla por partido: minutos y valoración de DT, ayudante y coordinador por jugador del plantel — ver `src/db/semaforo_repo.py`; **todavía no se sincronizan**) | — (pendiente: reemplazar `player_ratings` por dorsal) |
 | Tracking (`.parquet` en `data/outputs/`) y calibración (`data/calibracion/`) | — |
 

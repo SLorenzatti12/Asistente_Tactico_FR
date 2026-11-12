@@ -1077,6 +1077,63 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
 - **El umbral es absoluto** y se eligió mirando este partido: la mediana del 2° tiempo (1,45 m/s) es más alta que la del 1° (1,31). Hay que revisarlo con otro partido o con otra cámara.
 - **El #958** quedó marcado (87%) aunque Santi lo calificó "basculación normal": el juego venía lento.
 
+## Tags con clip, botón "Juego detenido" y vista Clips (12/11/2026)
+
+**Pedido (Santi):** que cada tag guarde un clip alrededor de la pulsación, y un botón "Juego detenido" para darle al sistema el dato que hoy estima. Toca `tagging.py` (de Luci); Santi le avisa.
+
+**Decisiones (Santi):**
+- **Ventana del clip:** 5 s antes y **10 s** después de apretar (`TAG_SEGUNDOS_ANTES`, `TAG_SEGUNDOS_DESPUES`).
+- **Juego detenido:** un toque al parar y otro al reanudar.
+- **Vista "Clips"** para mirarlos.
+
+**Cómo quedó:**
+- **Eventos:** `time_sec` pasa a ser el segundo de la pulsación (antes, la pulsación menos un colchón de 5 s), con columnas nuevas `inicio_sec` y `fin_sec`.
+  - Migración aditiva en `init_db()`.
+  - Los eventos anteriores quedan con `inicio_sec`/`fin_sec` en NULL y se leen como `time_sec` a `time_sec + 15`.
+  - Ir al momento (historial, línea de tiempo) lleva al comienzo del clip.
+- **Paradas** (tabla `paradas`: inicio, fin, autor):
+  - el botón "⏸ Juego detenido" abre una parada y, apretado de nuevo ("▶ Se reanudó"), la cierra; también con la tecla <kbd>D</kbd>;
+  - se ven y se borran en Eventos → "Juego detenido"; el borrado queda en el registro.
+- **Patrones:** si el video tiene paradas cerradas, el juego detenido sale de ellas y no de la estimación por movimiento (`estado_juego.py`). La tarjeta dice "Juego detenido (tagueado)" y arriba se aclara de dónde sale.
+  - Igual que antes, solo marca: no saca momentos ni cambia la severidad.
+- **Vista Clips** (`clips_view.py`):
+  - un clip por tag (su ventana) y por parada (de que se detuvo a que se reanudó);
+  - filtros por tipo y equipo; las paradas no son de un equipo y aparecen solo con "Ambos equipos";
+  - "Reproducir los N clips" o "Desde el clip elegido": el video reproduce cada clip de su comienzo a su fin y sigue con el próximo, con un rótulo "Clip k de N";
+  - mover el video fuera del clip corta la secuencia;
+  - usa el mismo video anotado: no genera archivos.
+- **Encabezado:** con la quinta vista, los botones de navegación tienen 8 px de margen lateral y las columnas se rebalancearon, para que todo entre en una línea a 1440 px.
+- **`scripts/comparar_juego_detenido.py <clip>`:** paradas tagueadas contra la estimación, segundo a segundo. Solo lee.
+
+**Verificado:**
+- AppTest sobre una copia de la base: un tag a los 100 s queda con clip 95–110 y su autor; el botón abre y cierra la parada; Patrones dice "según la parada tagueada" y la tarjeta del #2374 "Juego detenido (tagueado)"; Clips lista los clips y el filtro de equipo los separa; un evento viejo se lee como 50–65.
+- En el navegador, sobre una copia: el encabezado en una línea a 1440 px; la secuencia pasa del clip 1 (0:50–1:05) al clip 2 (1:35–1:50) sola.
+- **Sin probar en el navegador:** las teclas <kbd>D</kbd> y <kbd>1</kbd>–<kbd>9</kbd> con la ventana nueva.
+
+**Primer tiempo de Sportivo – Crecer tagueado entero (Santi, 12/11/2026):** 26 paradas, 555 s (35% del tramo 0:10–26:49).
+- **Estimación vigente** (1,4 m/s, ≥15 s): 12 intervalos, 578 s (36%).
+  - Encuentra el **77%** del tiempo detenido tagueado; el **74%** de lo que marca estaba detenido.
+  - No encuentra 2 paradas largas (1:47–2:12 y 4:53–5:14) ni las 6 de menos de 15 s.
+  - Marca de más 5:43–6:09, 16:03–17:10 y 25:06–25:27 (menos de la mitad tagueado).
+- **Otros parámetros** (encontrado / precisión; no se cambió nada):
+
+| Umbral | ≥5 s | ≥10 s | ≥15 s |
+|---|---|---|---|
+| 1,3 m/s | 82% / 69% | 75% / 74% | 72% / 78% |
+| 1,4 m/s | 90% / 63% | 86% / 73% | 77% / 74% (vigente) |
+| 1,5 m/s | 94% / 58% | 90% / 65% | 87% / 73% |
+
+  Bajar la duración mínima a 10 s ganaría 9 puntos de lo encontrado con la misma precisión. **No se cambia todavía:** es un solo tiempo, y el 1,4 m/s se eligió mirando este mismo partido. Falta ver si se sostiene en el 2° tiempo.
+- **Efecto en los momentos:**
+  - Criterios vigentes: sin cambio; el #2374 sigue marcado (65% de sus tramos en paradas tagueadas, 96% con la estimación).
+  - Criterios de prueba (19 momentos): marcados 7 con la estimación y 4 con los tags. Dejan de marcarse #1500, #2684 (correcto), #2643 (no se ve: equipo mal asignado) y #1774; pasa a marcarse #264 (correcto). Siguen #2374, #2242 y #674, que coinciden con los comentarios ("esperando la reanudación", córner). Ninguno de los 4 útiles queda marcado con ninguna de las dos fuentes.
+- La última parada va de 25:32 hasta el final del video (26:49): si el juego se reanudó antes, hay que corregirla.
+
+**Límites:**
+- **Un video con pocas paradas tagueadas** usa solo esas: si se tagueó una parte del partido, el resto queda sin juego detenido. El tagueo tiene que ser completo o no estar.
+- **`inicio_sec`, `fin_sec` y `paradas` no se sincronizan a la nube todavía** (el esquema de la nube no los tiene).
+- La ventana es fija: un tag no se alarga ni se acorta a mano.
+
 ## Mejora futura: propagar la calibración en video con paneo (no implementada)
 
 **Contexto:** en `partido_clip2` (transmisión con paneo), una matriz única valida solo el 12 % del clip. El caso de uso real del club es cámara fija (Sportivo), donde una matriz alcanza, así que esto queda registrado y no se implementa por ahora.
