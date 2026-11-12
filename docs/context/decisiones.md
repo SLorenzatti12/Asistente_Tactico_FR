@@ -928,7 +928,7 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
 | 2° tiempo | 3: `desconectado` #82 (0:43) y **`no_achica` #696 (5:31) y #1394 (12:02)** | 9 | 24 |
 
 - Son los **primeros "no achica" con datos reales**. En el 1° tiempo no hubo 4 subidas evaluables por jugador.
-- Calificados el 28/10/2026 (ver abajo). **Esta tabla es de antes de corregir `no_achica` y de filtrar arqueros (30/10/2026):** con los criterios vigentes ahora son 2 momentos en el 1° tiempo (`desconectado` #2374 y `no_achica` #931) y 1 en el 2° (`desconectado` #82).
+- Calificados el 28/10/2026 (ver abajo). **Esta tabla es de antes de corregir `no_achica` y de filtrar arqueros (30/10/2026) y de corregir el equipo del arquero (02/11/2026):** con los criterios vigentes ahora es 1 momento en el 1° tiempo y 5 en el 2° (ver "Aplicado" más abajo).
 
 **Verificado en el dashboard (AppTest):** el partido aparece agrupado con sus dos tiempos, y las cuatro vistas abren sin errores en el 2° tiempo. Patrones muestra los 3 momentos y "los equipos cambiaron de lado". El Semáforo usa una sola planilla para el partido.
 
@@ -975,14 +975,22 @@ El de 25 cuadros/s con horario redondo parece un archivo exportado (los iPhone g
   - **#2158, no se ve: es el arquero**, de azul oscuro. El 40% de sus filas son `goalkeeper`, y el filtro de arqueros pide más de la mitad.
 - **El arquero de azul oscuro es de Sportivo (Santi, 30/10/2026), así que el lado que asigna el sistema está bien y el que falla es el color.** Su camiseta se parece a la de Crecer, y el color manda en los tracks con menos de la mitad de filas `goalkeeper`.
   - **Tracks de 30 s o más, cerca del arco de Sportivo, con 10–50% de filas de arquero y marcados visitantes:** 7 en el 2° tiempo (uno de 296 s) y 5 en el 1°. No se revisaron uno por uno.
-  - **Sigue sin corregir:** esas filas cuentan para el equipo equivocado en la vista Jugadores y en las líneas de referencia de los patrones.
-  - **Efecto medido (31/10/2026, sin aplicar, a la espera de decisión de Santi).** Regla probada: más de 20% de filas `goalkeeper` y esas filas a no más de 20 m de la posición habitual del track. Ese track recibe equipo por lado y sale de las líneas y del bloque. La asignación real, sin cambios, reproduce los parquets vigentes fila por fila.
+  - Esas filas contaban para el equipo equivocado en la vista Jugadores y en las líneas de referencia de los patrones. Corregido el 02/11/2026 (ver abajo).
+  - **Efecto medido (31/10/2026, antes de aplicarla).** Regla probada: más de 20% de filas `goalkeeper` y esas filas a no más de 20 m de la posición habitual del track. Ese track recibe equipo por lado y sale de las líneas y del bloque. La asignación real, sin cambios, reproduce los parquets vigentes fila por fila.
     - **Tracks:** cambian de equipo 16 en el 1° tiempo y 22 en el 2°. De los 15 de 30 s o más, en las imágenes 14 son el arquero de azul oscuro y en 1 no se llega a ver. El corte de posición deja afuera al #2520, un jugador de blanco cuyo track salta al otro arquero; con 10% entraría además el #1452, otro track mezclado.
     - **Corregir solo el equipo empeora:** el arquero pasa a la línea y al bloque del local (profundidad del local en el 2° tiempo, de 32,6 a 35,8 m).
     - **Bloque, con la regla completa (mediana):** 1° tiempo, área del local de 786 a 754 m² y del visitante de 485 a 478 m²; 2° tiempo, local igual y visitante de 513 a 494 m².
     - **Patrones, criterios vigentes:** 1° tiempo de 2 a 1 momentos (sale #931); 2° tiempo de 1 a 5 (entran #1054, #1822, #1545, #2123, sin calificar).
     - **Patrones, criterios de prueba:** de 38 a 47 momentos. Salen 5 correctos (#931, #2329, #958, #1576, #1716) y 1 útil (#1547), y entran 15 sin calificar. Las fases cambian en 5% y 11,3% de las filas, porque el arquero entra en el centro del bloque de su equipo real.
-    - **Límites:** los cortes de 20% y 20 m salen de mirar este partido. Aplicado de verdad, el reclustering puede mover algún track más. Otra vez, los momentos cambian bastante con un ajuste chico de los datos.
+    - **Límites:** los cortes de 20% y 20 m salen de mirar este partido. Otra vez, los momentos cambian bastante con un ajuste chico de los datos.
+  - **Aplicado (02/11/2026, decisión de Santi):**
+    - **Código:** `tracks_arquero()` suma esta regla (`PROPORCION_MIN_ARQUERO_CERCA`, `MAX_DIST_FILAS_ARQUERO_M`), así que esos tracks reciben equipo por lado, quedan fuera del color y de las líneas. Las fases los siguen contando, como a todo arquero. El parquet guarda `equipos_info["ids_arquero"]` y el mapa (`map_view._players`, con el OK de Nico) los deja fuera del bloque.
+    - **Parquets:** regenerados `sportivo_crop3` y `sportivo_t2` con `team_assignment`; los anteriores quedan en `*_coords_field_antes_arquero.parquet`. Solo cambia `team` y `equipos_info`: filas, clases, coordenadas y tramos son idénticos.
+    - **Tracks que cambian:** 16 en el 1° tiempo y 24 en el 2°. Dos del 2° (#2108 y #2495) cambian al volver a agrupar por color, fuera de la regla.
+    - **Momentos vigentes:** 1° tiempo, `desconectado` #2374; 2° tiempo, `desconectado` #82, #1054 y #1822, y `no_achica` #1545 y #2123. Con criterios de prueba, 19 y 28. Igual que lo medido.
+    - **Bloque en el mapa (mediana):** 1° tiempo, área del local de 786 a 731 m² y del visitante de 485 a 467 m²; 2° tiempo, de 745 a 730 m² y de 513 a 491 m². Baja un poco más que lo medido porque el mapa saca también las filas `player` de los arqueros claros.
+    - **Verificado:** control entre tiempos OK, sin cambio de lado dentro de cada video, referencia de color ΔE 3,8 y 2,3. AppTest: las cuatro vistas abren sin errores en los dos tiempos.
+    - **Para volver atrás:** revertir el commit y copiar los dos `*_antes_arquero.parquet` sobre los vigentes.
 - **Qué hacer con los arqueros:**
   - **Bajar `PROPORCION_MIN_ARQUERO` no sirve:** ese corte también define quién entra en las líneas de referencia. Al 15% saca a #2158, pero con los criterios vigentes aparecen #1054 y #1822, y con los de prueba se pierde el #1547, que era útil. Al 10% se pierde además el #2903.
   - **Aplicado (30/10/2026, decisión de Santi): no se reporta el momento si el track tiene más de 10% de filas `goalkeeper`** (`PROPORCION_MAX_ARQUERO_EN_MOMENTO`), sin tocar las líneas. De los 40 momentos con criterios de prueba, saca solo a #2158 y #2774, los dos arqueros; el siguiente tiene 2%. Los demás momentos dan idéntico fila por fila, en los cuatro videos con equipos. Lo que sale queda dicho en "Patrones no evaluados".
